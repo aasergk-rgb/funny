@@ -1,0 +1,331 @@
+// ループ・ミー：ゲームの中核シミュレーション（DOM 非依存。ブラウザでも Node でも動く）
+(function (root) {
+  'use strict';
+
+  const T = 32; // タイルサイズ(px)
+  const FPS = 60;
+  const PHY = {
+    w: 20, h: 28,
+    acc: 0.7, airAcc: 0.45, fric: 0.8, max: 3.2,
+    g: 0.62, jump: -10.2, cut: 0.7, maxFall: 11,
+    coyote: 6, buffer: 6,
+  };
+  const IN = { L: 1, R: 2, J: 4 };
+  const PARADOX_TOLERANCE = 0.75;
+
+  function parseLevel(def) {
+    const map = def.map;
+    const H = map.length;
+    const W = map[0].length;
+    const L = {
+      def, W, H, tiles: [], stars: [], plates: [], doorTiles: {},
+      start: null, goal: null, key: null, lockTiles: [],
+    };
+    for (let y = 0; y < H; y++) {
+      if (map[y].length !== W) throw new Error(`${def.name}: 行 ${y} の長さが ${map[y].length}（${W} のはず）`);
+      const row = [];
+      for (let x = 0; x < W; x++) {
+        const c = map[y][x];
+        let t = c;
+        if (c === 'P') { L.start = { x, y }; t = '.'; }
+        else if (c === '*') { L.stars.push({ id: L.stars.length, x, y }); t = '.'; }
+        else if (c === 'G') { L.goal = { x, y }; t = '.'; }
+        else if (c === 'k') { L.key = { x, y }; t = '.'; }
+        else if (c >= 'a' && c <= 'd') { L.plates.push({ x, y, letter: c.toUpperCase() }); t = '.'; }
+        else if (c >= 'A' && c <= 'D') { (L.doorTiles[c] = L.doorTiles[c] || []).push({ x, y }); }
+        else if (c === 'L') { L.lockTiles.push({ x, y }); }
+        row.push(t);
+      }
+      L.tiles.push(row);
+    }
+    if (!L.start || !L.goal) throw new Error(`${def.name}: P と G が必要です`);
+    return L;
+  }
+
+  function overlap(ax, ay, aw, ah, bx, by, bw, bh) {
+    return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+  }
+  function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+  function approach(v, target, step) {
+    if (v < target) return Math.min(v + step, target);
+    if (v > target) return Math.max(v - step, target);
+    return v;
+  }
+
+  class Sim {
+    constructor(def) {
+      this.def = def;
+      this.L = parseLevel(def);
+      this.loopFrames = Math.round((def.time || 10) * FPS);
+    }
+
+    // ghostRecs: これまでのループの記録（古い順）
+    startLoop(ghostRecs) {
+      this.frame = 0;
+      this.actors = ghostRecs.map((rec, i) => this.makeActor(i, rec));
+      this.player = this.makeActor(ghostRecs.length, null);
+      this.actors.push(this.player);
+      this.rec = { inputs: [], pos: [], stars: [] };
+      this.doorOpen = {};
+      for (const k in this.L.doorTiles) this.doorOpen[k] = false;
+      this.lockOpen = false;
+      this.keyTaken = false;
+      this.starsLoop = new Set();
+      this.committed = new Set();
+      for (const r of ghostRecs) for (const s of r.stars) this.committed.add(s);
+      this.plats = (this.def.platforms || []).map((p) => {
+        const o = { def: p, w: p.w * T, h: 10, x: 0, y: 0, dx: 0, dy: 0, py: 0 };
+        this.placePlat(o, 0);
+        return o;
+      });
+      this.computeDoors([]);
+    }
+
+    makeActor(idx, rec) {
+      const s = this.L.start;
+      return {
+        idx, rec, ghost: !!rec, w: PHY.w, h: PHY.h,
+        x: s.x * T + (T - PHY.w) / 2, y: (s.y + 1) * T - PHY.h,
+        vx: 0, vy: 0, onGround: false, support: null,
+        coyote: 0, jumpBuf: 0, prevJ: false,
+        alive: true, facing: 1, dx: 0, dy: 0, px: 0, py: 0, fate: null,
+      };
+    }
+
+    placePlat(o, f) {
+      const p = o.def;
+      const ph = ((f + (p.phase || 0)) % p.period) / p.period;
+      const s = (1 - Math.cos(ph * Math.PI * 2)) / 2; // 0→1→0 のなめらかな往復
+      const nx = p.x * T + (p.dx || 0) * T * s;
+      const ny = p.y * T + (p.dy || 0) * T * s;
+      o.dx = nx - o.x; o.dy = ny - o.y;
+      o.py = o.y;
+      o.x = nx; o.y = ny;
+    }
+
+    solid(cx, cy) {
+      if (cx < 0 || cx >= this.L.W || cy < 0) return true;
+      if (cy >= this.L.H) return false;
+      const c = this.L.tiles[cy][cx];
+      if (c === '#') return true;
+      if (c === 'L') return !this.lockOpen;
+      if (c >= 'A' && c <= 'D') return !this.doorOpen[c];
+      return false;
+    }
+
+    moveX(a, dx) {
+      if (dx === 0) return false;
+      a.x += dx;
+      const y0 = Math.floor(a.y / T), y1 = Math.floor((a.y + a.h - 0.001) / T);
+      if (dx > 0) {
+        const cx = Math.floor((a.x + a.w - 0.001) / T);
+        for (let cy = y0; cy <= y1; cy++) if (this.solid(cx, cy)) { a.x = cx * T - a.w; return true; }
+      } else {
+        const cx = Math.floor(a.x / T);
+        for (let cy = y0; cy <= y1; cy++) if (this.solid(cx, cy)) { a.x = (cx + 1) * T; return true; }
+      }
+      return false;
+    }
+
+    moveY(a, dy) {
+      if (dy === 0) return null;
+      a.y += dy;
+      const x0 = Math.floor(a.x / T), x1 = Math.floor((a.x + a.w - 0.001) / T);
+      if (dy > 0) {
+        const cy = Math.floor((a.y + a.h - 0.001) / T);
+        for (let cx = x0; cx <= x1; cx++) if (this.solid(cx, cy)) { a.y = cy * T - a.h; return 'down'; }
+      } else {
+        const cy = Math.floor(a.y / T);
+        for (let cx = x0; cx <= x1; cx++) if (this.solid(cx, cy)) { a.y = (cy + 1) * T; return 'up'; }
+      }
+      return null;
+    }
+
+    pressing(a, p) {
+      return overlap(a.x, a.y, a.w, a.h, p.x * T + 3, (p.y + 1) * T - 8, T - 6, 8);
+    }
+
+    platePressed(p) {
+      return this.actors.some((a) => a.alive && this.pressing(a, p));
+    }
+
+    computeDoors(ev) {
+      for (const letter in this.L.doorTiles) {
+        const ps = this.L.plates.filter((p) => p.letter === letter);
+        let open = ps.length > 0 && ps.every((p) => this.platePressed(p));
+        // 扉は誰かが挟まっている間は閉まらない
+        if (!open && this.doorOpen[letter]) {
+          const stuck = this.L.doorTiles[letter].some((t) =>
+            this.actors.some((a) => a.alive && overlap(a.x, a.y, a.w, a.h, t.x * T, t.y * T, T, T)));
+          if (stuck) open = true;
+        }
+        if (open !== this.doorOpen[letter]) {
+          this.doorOpen[letter] = open;
+          ev.push({ type: open ? 'doorOpen' : 'doorClose', letter });
+        }
+      }
+    }
+
+    updateActor(a, bits, ev) {
+      const L = (bits & IN.L) !== 0, R = (bits & IN.R) !== 0, J = (bits & IN.J) !== 0;
+      const jp = J && !a.prevJ;
+      a.prevJ = J;
+
+      // 乗っているもの（ゴースト・動く床）に運ばれる
+      if (a.support) {
+        const s = a.support;
+        if (s.alive === false || !(a.x + a.w > s.x && a.x < s.x + s.w)) {
+          a.support = null;
+        } else {
+          this.moveX(a, s.dx);
+          this.moveY(a, (s.y - a.h) - a.y);
+          if (!(a.x + a.w > s.x && a.x < s.x + s.w)) a.support = null;
+        }
+      }
+
+      const dir = (R ? 1 : 0) - (L ? 1 : 0);
+      if (dir) {
+        a.facing = dir;
+        const acc = a.onGround ? PHY.acc : PHY.airAcc;
+        a.vx += clamp(dir * PHY.max - a.vx, -acc, acc);
+      } else {
+        a.vx = approach(a.vx, 0, a.onGround ? PHY.fric : PHY.airAcc * 0.5);
+      }
+
+      if (jp) a.jumpBuf = PHY.buffer; else if (a.jumpBuf > 0) a.jumpBuf--;
+      if (a.onGround) a.coyote = PHY.coyote; else if (a.coyote > 0) a.coyote--;
+      if (a.jumpBuf > 0 && a.coyote > 0) {
+        a.vy = PHY.jump;
+        a.jumpBuf = 0; a.coyote = 0; a.onGround = false; a.support = null;
+        if (!a.ghost) ev.push({ type: 'jump' });
+      }
+      if (!J && a.vy < 0) a.vy += PHY.g * PHY.cut; // ボタンを離すと低いジャンプ
+      a.vy = Math.min(a.vy + PHY.g, PHY.maxFall);
+
+      if (this.moveX(a, a.vx)) a.vx = 0;
+
+      const prevBottom = a.y + a.h;
+      const falling = a.vy >= 0;
+      const hit = this.moveY(a, a.vy);
+      a.onGround = false;
+      a.support = null;
+
+      // ゴーストの頭・動く床には上から乗れる（下からはすり抜け）
+      let best = null;
+      if (falling) {
+        const bottom = a.y + a.h;
+        const cands = this.plats.concat(this.actors);
+        for (const c of cands) {
+          if (c === a || c.alive === false) continue;
+          if (!(a.x + a.w > c.x && a.x < c.x + c.w)) continue;
+          const top = c.y;
+          const prevTop = c.py;
+          if (prevBottom <= Math.max(top, prevTop) + 0.01 && bottom >= top - 0.01) {
+            if (!best || top < best.y) best = c;
+          }
+        }
+      }
+      if (best) {
+        const wasAir = a.vy > 2;
+        a.y = best.y - a.h;
+        a.vy = 0; a.onGround = true; a.support = best;
+        if (wasAir && !a.ghost) ev.push({ type: 'land' });
+      } else if (hit === 'down') {
+        if (a.vy > 2 && !a.ghost) ev.push({ type: 'land' });
+        a.vy = 0; a.onGround = true;
+      } else if (hit === 'up') {
+        a.vy = 0;
+      }
+
+      a.dx = a.x - a.px;
+      a.dy = a.y - a.py;
+    }
+
+    touchingSpike(a) {
+      const x0 = Math.floor(a.x / T), x1 = Math.floor((a.x + a.w - 0.001) / T);
+      const y0 = Math.floor(a.y / T), y1 = Math.floor((a.y + a.h - 0.001) / T);
+      for (let cy = y0; cy <= y1; cy++) {
+        if (cy < 0 || cy >= this.L.H) continue;
+        for (let cx = x0; cx <= x1; cx++) {
+          if (cx < 0 || cx >= this.L.W) continue;
+          if (this.L.tiles[cy][cx] === '^' && overlap(a.x, a.y, a.w, a.h, cx * T + 4, cy * T + 18, T - 8, 14)) return true;
+        }
+      }
+      return false;
+    }
+
+    allStars() {
+      return this.L.stars.every((s) => this.committed.has(s.id) || this.starsLoop.has(s.id));
+    }
+
+    // 1フレーム進める。bits はプレイヤーの入力。発生したイベントの配列を返す
+    step(bits) {
+      const ev = [];
+      const f = this.frame;
+
+      for (const p of this.plats) this.placePlat(p, f + 1);
+      this.computeDoors(ev);
+      for (const a of this.actors) { a.px = a.x; a.py = a.y; }
+
+      for (const a of this.actors) {
+        if (!a.alive) continue;
+        const b = a.ghost ? (f < a.rec.inputs.length ? a.rec.inputs[f] : 0) : bits;
+        this.updateActor(a, b, ev);
+
+        const dead = this.touchingSpike(a) || a.y > this.L.H * T;
+        if (a.ghost) {
+          if (dead) {
+            a.alive = false; a.fate = 'spike';
+            ev.push({ type: 'ghostLost', idx: a.idx, x: a.x, y: a.y, reason: 'spike' });
+            continue;
+          }
+          if (f < a.rec.pos.length) {
+            const p = a.rec.pos[f];
+            if (Math.abs(p[0] - a.x) > PARADOX_TOLERANCE || Math.abs(p[1] - a.y) > PARADOX_TOLERANCE) {
+              a.alive = false; a.fate = 'paradox';
+              ev.push({ type: 'ghostLost', idx: a.idx, x: a.x, y: a.y, reason: 'paradox' });
+              continue;
+            }
+          }
+        } else if (dead) {
+          a.alive = false;
+          ev.push({ type: 'death', x: a.x, y: a.y });
+        }
+
+        // 星・鍵を拾う
+        for (const s of this.L.stars) {
+          if (this.starsLoop.has(s.id)) continue;
+          if (overlap(a.x, a.y, a.w, a.h, s.x * T + 8, s.y * T + 8, 16, 16)) {
+            this.starsLoop.add(s.id);
+            if (!a.ghost) this.rec.stars.push(s.id);
+            if (!this.committed.has(s.id)) ev.push({ type: 'star', id: s.id, x: s.x, y: s.y, ghost: a.ghost });
+          }
+        }
+        const k = this.L.key;
+        if (k && !this.keyTaken && overlap(a.x, a.y, a.w, a.h, k.x * T + 6, k.y * T + 6, 20, 20)) {
+          this.keyTaken = true;
+          this.lockOpen = true;
+          ev.push({ type: 'key', x: k.x, y: k.y });
+        }
+      }
+
+      const pl = this.player;
+      if (pl.alive) {
+        this.rec.inputs.push(bits);
+        this.rec.pos.push([pl.x, pl.y]);
+        const g = this.L.goal;
+        if (this.allStars() && overlap(pl.x, pl.y, pl.w, pl.h, g.x * T + 8, g.y * T + 4, 16, 28)) {
+          ev.push({ type: 'win' });
+        }
+      }
+
+      this.frame++;
+      if (this.frame >= this.loopFrames) ev.push({ type: 'timeout' });
+      return ev;
+    }
+  }
+
+  const api = { T, FPS, PHY, IN, Sim, parseLevel };
+  root.LM = Object.assign(root.LM || {}, api);
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+})(typeof window !== 'undefined' ? window : globalThis);
