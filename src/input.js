@@ -16,7 +16,18 @@
     Escape: 'menu', Enter: 'confirm', KeyM: 'mute',
   };
 
+  // 文字入力中はゲームの操作にしない
+  const typing = (e) => {
+    const el = e.target;
+    if (!el || !el.tagName) return false;
+    if (el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') return true;
+    return el.tagName === 'INPUT' && el.type !== 'checkbox';
+  };
+
   root.addEventListener('keydown', (e) => {
+    if (typing(e)) return;
+    // ボタンにフォーカスがあるときの Enter / Space はボタン自身に任せる
+    if (e.target && e.target.tagName === 'BUTTON' && (e.code === 'Enter' || e.code === 'Space')) return;
     const k = KEYS[e.code];
     if (k) { held[k] = true; e.preventDefault(); }
     const a = ACTIONS[e.code];
@@ -24,6 +35,7 @@
     root.LM.Audio.unlock();
   });
   root.addEventListener('keyup', (e) => {
+    if (typing(e)) return;
     const k = KEYS[e.code];
     if (k) held[k] = false;
   });

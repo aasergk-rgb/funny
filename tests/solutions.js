@@ -138,3 +138,58 @@ module.exports.push(
     [['go', 12.4], ['when', (s) => s.doorOpen.E], ['go', 18.4], ['when', (s) => s.lockOpen], ['go', 21.5]],
   ],
 );
+
+// ===== ワールド3 =====
+const enemy = (i) => (s) => s.enemies[i];
+const px = (s) => s.player.x + s.player.w / 2;
+// 敵が近づいてきたら真上にジャンプして踏む
+const stompWhenClose = (i) => [
+  ['when', (s) => { const e = enemy(i)(s); return !e.alive || Math.abs(e.x + 12 - px(s)) < 44 && (e.x + 12 - px(s)) * e.dir < 0; }],
+  ['hold', 'J', 14], ['ground'],
+];
+module.exports.push(
+  // 3-1 ワープ
+  [[['go', 4.5], ['holdUntil', 'R', (s) => px(s) > 12 * 32], ['holdUntil', 'L', (s) => px(s) < 12 * 32], ['go', 5.5],
+    ['go', 7.5], ['ground'], ['holdUntil', 'L', (s) => px(s) > 12 * 32], ['go', 19.5], ['go', 21.5]]],
+  // 3-2 時限スイッチ
+  [[['go', 2.5], ['go', 6.3], ['hold', 'RJ', 14], ['ground'], ['go', 10.3], ['hold', 'RJ', 14], ['ground'], ['go', 20.5]]],
+  // 3-3 パトロール
+  [[
+    ['go', 4.3], ['when', (s) => enemy(0)(s).x > 8.5 * 32], ['hold', 'RJ', 14], ['ground'], ...stompWhenClose(0),
+    ['go', 8.5], ['hold', 'J', 12], ['ground'], ['go', 10.3], ['hold', 'RJ', 14], ['ground'],
+    ['go', 13.3], ['hold', 'RJ', 14], ['ground'], ['when', (s) => enemy(1)(s).x > 17.5 * 32 && enemy(1)(s).dir > 0],
+    ['hold', 'RJ', 14], ['ground'], ...stompWhenClose(1), ['go', 19.3], ['hold', 'RJ', 14], ['ground'], ['go', 21.5],
+  ]],
+  // 3-4 露払い
+  [
+    [['go', 4.3], ['when', (s) => enemy(0)(s).x > 10 * 32], ['hold', 'RJ', 14], ['ground'], ...stompWhenClose(0), ['go', 9.5]],
+    [['go', 4.3], ['when', (s) => !enemy(0)(s).alive], ['hold', 'RJ', 14], ['ground'], ['go', 12.3], ['hold', 'RJ', 14], ['ground'], ['go', 21.5]],
+  ],
+  // 3-5 ワープの向こう（渦は飛び越えられる）
+  [
+    [['go', 6.5], ['wait', 5], ['go', 6.5]],
+    [['go', 5.2], ['hold', 'RJ', 14], ['ground'], ['go', 20.5]],
+  ],
+  // 3-6 3秒の約束
+  [
+    [['go', 4.4], ['hold', 'J', 10], ['hold', 'L', 6], ['when', (s) => s.player.springing && s.player.y + 28 < 250], ['hold', 'L', 40], ['ground'], ['go', 1.5]],
+    [['go', 20.4], ['when', (s) => s.doorOpen.T], ['go', 22.5]],
+  ],
+  // 3-7 渦と鍵
+  [
+    [['go', 13.3], ['when', (s) => enemy(0)(s).x > 18 * 32 && enemy(0)(s).dir > 0], ['hold', 'RJ', 14], ['ground'],
+      ...stompWhenClose(0), ['go', 17.5], ['hold', 'J', 12], ['ground'], ['go', 19.3], ['hold', 'RJ', 14], ['ground'],
+      ['go', 21.5], ['wait', 5], ['go', 3.5]],
+    [['go', 5.5], ['when', (s) => s.lockOpen], ['go', 2.5]],
+  ],
+  // 3-8 時の裂け目
+  [
+    [['go', 2.3], ['when', (s) => enemy(0)(s).x > 6.5 * 32 && enemy(0)(s).dir > 0], ['hold', 'RJ', 12], ['ground'],
+      ...stompWhenClose(0), ['go', 7.5]],
+    [['go', 2.3], ['when', (s) => !enemy(0)(s).alive], ['hold', 'RJ', 12], ['ground'], ['go', 8.3], ['hold', 'RJ', 14], ['ground'],
+      ['holdUntil', 'R', (s) => s.player.y < 6 * 32], ['go', 15.6]],
+    [['go', 2.3], ['when', (s) => !enemy(0)(s).alive], ['hold', 'RJ', 12], ['ground'], ['go', 8.3], ['hold', 'RJ', 14], ['ground'],
+      ['holdUntil', 'R', (s) => s.player.y < 6 * 32], ['go', 14.2], ['when', (s) => s.actors[1].onGround && s.actors[1].x > 15 * 32],
+      ['hold', 'RJ', 14], ['ground'], ['hold', 'RJ', 30], ['ground'], ['go', 17.5], ['go', 22.5]],
+  ],
+);

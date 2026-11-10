@@ -10,6 +10,7 @@
     g: 0.62, jump: -10.2, cut: 0.7, maxFall: 11,
     coyote: 6, buffer: 6,
     spring: -14, crumble: 36,
+    timer: 180, enemySpeed: 1.2, stomp: -7.5,
   };
   const IN = { L: 1, R: 2, J: 4 };
   const PARADOX_TOLERANCE = 0.75;
@@ -21,6 +22,7 @@
     const L = {
       def, W, H, tiles: [], stars: [], plates: [], doorTiles: {},
       start: null, goal: null, key: null, lockTiles: [],
+      portals: {}, enemies: [],
     };
     for (let y = 0; y < H; y++) {
       if (map[y].length !== W) throw new Error(`${def.name}: 行 ${y} の長さが ${map[y].length}（${W} のはず）`);
@@ -35,11 +37,19 @@
         else if (c >= 'a' && c <= 'e') { L.plates.push({ x, y, letter: c.toUpperCase() }); t = '.'; }
         else if (c >= 'A' && c <= 'E') { (L.doorTiles[c] = L.doorTiles[c] || []).push({ x, y }); }
         else if (c === 'L') { L.lockTiles.push({ x, y }); }
+        else if (c === 't') { L.plates.push({ x, y, letter: 'T', timer: true }); t = '.'; }
+        else if (c === 'T') { (L.doorTiles.T = L.doorTiles.T || []).push({ x, y }); }
+        else if (c >= '1' && c <= '4') { (L.portals[c] = L.portals[c] || []).push({ x, y }); }
+        else if (c === 'm') { L.enemies.push({ x, y }); t = '.'; }
         row.push(t);
       }
       L.tiles.push(row);
     }
+    if (def.lenient) return L; // エディタの表示用
     if (!L.start || !L.goal) throw new Error(`${def.name}: P と G が必要です`);
+    for (const d in L.portals) {
+      if (L.portals[d].length !== 2) throw new Error(`${def.name}: ワープ ${d} は2つ1組で置いてください`);
+    }
     return L;
   }
 
@@ -74,6 +84,8 @@
       this.keyTaken = false;
       this.starsLoop = new Set();
       this.crumbleAt = {};
+      this.timerT = 0;
+      this.enemies = this.L.enemies.map((e) => ({ x: e.x * T + 4, y: (e.y + 1) * T - 20, w: 24, h: 20, dir: 1, alive: true }));
       this.committed = new Set();
       for (const r of ghostRecs) for (const s of r.stars) this.committed.add(s);
       this.plats = (this.def.platforms || []).map((p) => {
@@ -112,6 +124,7 @@
       const c = this.L.tiles[cy][cx];
       if (c === '#' || c === 'S') return true;
       if (c === 'L') return !this.lockOpen;
+      if (c === 'T') return !this.doorOpen.T;
       if (c === 'E') return !!this.doorOpen.E; // かけ橋：スイッチが押されている間だけ現れる
       if (c >= 'A' && c <= 'D') return !this.doorOpen[c];
       if (c === '~') return !this.crumbled(cx, cy);
@@ -176,7 +189,15 @@
     computeDoors(ev) {
       for (const letter in this.L.doorTiles) {
         const ps = this.L.plates.filter((p) => p.letter === letter);
-        let open = ps.length > 0 && ps.every((p) => this.platePressed(p));
+        let open;
+        if (letter === 'T') {
+          // 時限スイッチ：最後に押されてから一定時間だけ開く
+          if (ps.some((p) => this.platePressed(p))) this.timerT = PHY.timer;
+          else if (this.timerT > 0) this.timerT--;
+          open = this.timerT > 0;
+        } else {
+          open = ps.length > 0 && ps.every((p) => this.platePressed(p));
+        }
         // 扉（かけ橋）は誰かが挟まっている間は閉まらない（現れない）
         const becomesSolid = letter === 'E' ? (open && !this.doorOpen[letter]) : (!open && this.doorOpen[letter]);
         if (becomesSolid) {
@@ -299,6 +320,56 @@
       return this.L.stars.every((s) => this.committed.has(s.id) || this.starsLoop.has(s.id));
     }
 
+    // 敵：左右に歩き、壁や足場の端で折り返す（毎ループ同じ動き）
+    updateEnemies() {
+      for (const e of this.enemies) {
+        if (!e.alive) continue;
+        const nx = e.x + PHY.enemySpeed * e.dir;
+        const front = e.dir > 0 ? nx + e.w : nx;
+        const fx = Math.floor((e.dir > 0 ? front - 0.001 : front) / T);
+        const midY = Math.floor((e.y + e.h / 2) / T);
+        const footY = Math.floor((e.y + e.h + 1) / T);
+        const floor = this.solid(fx, footY) || this.tileAt(fx, footY) === '-';
+        if (this.solid(fx, midY) || !floor) e.dir = -e.dir;
+        else e.x = nx;
+      }
+    }
+
+    // 敵に触れたら true。上から踏んだら敵を倒して跳ねる
+    enemyContact(a, ev) {
+      for (const e of this.enemies) {
+        if (!e.alive) continue;
+        if (!overlap(a.x, a.y, a.w, a.h, e.x + 2, e.y + 2, e.w - 4, e.h - 2)) continue;
+        if (a.y > a.py && a.py + a.h <= e.y + 8) {
+          e.alive = false;
+          a.vy = PHY.stomp; a.onGround = false; a.support = null;
+          ev.push({ type: 'stomp', x: e.x, y: e.y, ghost: a.ghost });
+          continue;
+        }
+        return true;
+      }
+      return false;
+    }
+
+    // ワープ：同じ数字の出口へ移動（出口から出るまでは再ワープしない）
+    warp(a, ev) {
+      const cx = Math.floor((a.x + a.w / 2) / T), cy = Math.floor((a.y + a.h / 2) / T);
+      const c = this.tileAt(cx, cy);
+      if (c >= '1' && c <= '4') {
+        const key = cy * 1000 + cx;
+        if (a.portalFrom === key) return;
+        const pair = this.L.portals[c];
+        const to = pair[0].x === cx && pair[0].y === cy ? pair[1] : pair[0];
+        a.x = to.x * T + (T - a.w) / 2;
+        a.y = (to.y + 1) * T - a.h - 2;
+        a.support = null;
+        a.portalFrom = to.y * 1000 + to.x;
+        ev.push({ type: 'warp', from: { x: cx, y: cy }, to, ghost: a.ghost });
+      } else {
+        a.portalFrom = null;
+      }
+    }
+
     // 1フレーム進める。bits はプレイヤーの入力。発生したイベントの配列を返す
     step(bits) {
       const ev = [];
@@ -306,18 +377,21 @@
 
       for (const p of this.plats) this.placePlat(p, f + 1);
       this.computeDoors(ev);
+      this.updateEnemies();
       for (const a of this.actors) { a.px = a.x; a.py = a.y; }
 
       for (const a of this.actors) {
         if (!a.alive) continue;
         const b = a.ghost ? (f < a.rec.inputs.length ? a.rec.inputs[f] : 0) : bits;
         this.updateActor(a, b, ev);
+        this.warp(a, ev);
+        const hitEnemy = this.enemyContact(a, ev);
 
-        const dead = this.touchingSpike(a) || a.y > this.L.H * T;
+        const dead = hitEnemy || this.touchingSpike(a) || a.y > this.L.H * T;
         if (a.ghost) {
           if (dead) {
             a.alive = false; a.fate = 'spike';
-            ev.push({ type: 'ghostLost', idx: a.idx, x: a.x, y: a.y, reason: 'spike' });
+            ev.push({ type: 'ghostLost', idx: a.idx, x: a.x, y: a.y, reason: hitEnemy ? 'enemy' : 'spike' });
             continue;
           }
           if (f < a.rec.pos.length) {

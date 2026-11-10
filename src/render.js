@@ -7,7 +7,8 @@
 
   const BASE = {
     player: '#ff9f43', playerDark: '#c96a14',
-    door: { A: '#ff6b6b', B: '#4dabf7', C: '#51cf66', D: '#fcc419', E: '#3bc9db' },
+    door: { A: '#ff6b6b', B: '#4dabf7', C: '#51cf66', D: '#fcc419', E: '#3bc9db', T: '#f06595' },
+    portal: { 1: '#cc5de8', 2: '#22b8cf', 3: '#94d82d', 4: '#ff922b' }, enemy: '#fa5252',
     star: '#ffe066', gold: '#f5c542', plat: '#c4b5fd', spike: '#cfd4e6',
     text: '#f1f0ff', sub: '#a9a6d6', spring: '#ff6b6b',
   };
@@ -16,6 +17,10 @@
     night: {
       bg1: '#141331', bg2: '#221d48', wall: '#2d2a5c', wallTop: '#7b6ff0', wallDot: '#36326b',
       deco: 'rgba(160,150,255,0.07)', plank: '#9d8cff', crumble: '#5a4f8f',
+    },
+    rift: {
+      bg1: '#0b1622', bg2: '#1c0f2e', wall: '#1d2b42', wallTop: '#22d3ee', wallDot: '#26385a',
+      deco: 'rgba(120,230,255,0.08)', plank: '#22d3ee', crumble: '#3a4d6a',
     },
     factory: {
       bg1: '#19130f', bg2: '#2b2016', wall: '#3b2f25', wallTop: '#e8a33d', wallDot: '#4a3b2e',
@@ -125,7 +130,28 @@
     g.save();
     g.fillStyle = COLOR.deco;
     g.strokeStyle = COLOR.deco;
-    if (S.theme === 'factory') {
+    if (S.theme === 'rift') {
+      // 時の裂け目：光る亀裂と、漂う光
+      g.lineWidth = 3;
+      g.strokeStyle = 'rgba(240,101,149,0.18)';
+      g.beginPath();
+      const pts = [[80, 0], [140, 90], [110, 170], [210, 260], [180, 340], [260, H]];
+      pts.forEach(([x, y], k) => (k ? g.lineTo(x, y) : g.moveTo(x, y)));
+      g.stroke();
+      g.strokeStyle = 'rgba(34,211,238,0.14)';
+      g.beginPath();
+      const pts2 = [[W - 120, 0], [W - 200, 120], [W - 150, 220], [W - 260, 330], [W - 230, H]];
+      pts2.forEach(([x, y], k) => (k ? g.lineTo(x, y) : g.moveTo(x, y)));
+      g.stroke();
+      for (let i = 0; i < 30; i++) {
+        const x = (i * 131 + t * 12 * (1 + (i % 3))) % W;
+        const y = (i * 71 - t * 8 * (1 + (i % 2)) + H * 4) % H;
+        g.globalAlpha = 0.35;
+        g.fillStyle = i % 2 ? '#22d3ee' : '#f06595';
+        g.fillRect(x, y, 2, 2);
+      }
+      g.globalAlpha = 1;
+    } else if (S.theme === 'factory') {
       gear(g, 150, 150, 110, 12, t * 0.2);
       gear(g, 300, 260, 70, 9, -t * 0.34 + 0.2);
       gear(g, 640, 120, 90, 11, -t * 0.25);
@@ -285,6 +311,62 @@
       } else {
         g.fillRect(px + 4, py - 9, T - 8, 6);
       }
+      if (p.timer) {
+        // 時計のマーク
+        g.strokeStyle = col; g.lineWidth = 1.5;
+        g.beginPath(); g.arc(px + 16, py - 19, 5, 0, Math.PI * 2); g.stroke();
+        g.beginPath(); g.moveTo(px + 16, py - 19); g.lineTo(px + 16, py - 22); g.moveTo(px + 16, py - 19); g.lineTo(px + 18.5, py - 19); g.stroke();
+      }
+    }
+
+    // 時限扉の残り時間
+    if (L.doorTiles.T && sim.doorOpen.T) {
+      const top = L.doorTiles.T.reduce((m, d) => (d.y < m.y ? d : m), L.doorTiles.T[0]);
+      const k = sim.timerT / PHY.timer;
+      g.fillStyle = 'rgba(0,0,0,0.4)';
+      g.fillRect(top.x * T + 2, top.y * T - 8, T - 4, 4);
+      g.fillStyle = BASE.door.T;
+      g.fillRect(top.x * T + 2, top.y * T - 8, (T - 4) * k, 4);
+    }
+
+    // ワープ
+    for (const d in L.portals) {
+      const col = BASE.portal[d];
+      for (const p of L.portals[d]) {
+        const cx = p.x * T + 16, cy = p.y * T + 15;
+        g.save();
+        g.strokeStyle = col; g.lineWidth = 2.5; g.shadowColor = col; g.shadowBlur = 10;
+        for (let r = 0; r < 3; r++) {
+          const a0 = t * (2.5 + r) + r * 2;
+          g.globalAlpha = 0.9 - r * 0.25;
+          g.beginPath(); g.ellipse(cx, cy, 13 - r * 4, 15 - r * 4, 0, a0, a0 + Math.PI * 1.3); g.stroke();
+        }
+        g.globalAlpha = 0.8; g.fillStyle = col; g.shadowBlur = 0;
+        g.font = 'bold 9px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+        g.fillText(d, cx, cy + 1);
+        g.restore();
+      }
+    }
+
+    // 敵
+    for (const e of sim.enemies) {
+      if (!e.alive) continue;
+      const wob = Math.sin(sim.frame * 0.3) * 1.5;
+      g.save();
+      g.fillStyle = BASE.enemy;
+      g.beginPath();
+      g.moveTo(e.x, e.y + e.h);
+      for (let i = 0; i <= 4; i++) g.lineTo(e.x + (e.w * i) / 4, e.y + (i % 2 ? -3 : 3) + wob * (i % 2 ? 1 : 0));
+      g.lineTo(e.x + e.w, e.y + e.h);
+      g.closePath();
+      g.fill();
+      roundRect(g, e.x, e.y + 3, e.w, e.h - 3, 6); g.fill();
+      const ex = e.x + e.w / 2 + e.dir * 4;
+      g.fillStyle = '#fff';
+      g.fillRect(ex - 6, e.y + 7, 5, 5); g.fillRect(ex + 1, e.y + 7, 5, 5);
+      g.fillStyle = '#1b1838';
+      g.fillRect(ex - 5 + e.dir, e.y + 9, 3, 3); g.fillRect(ex + 2 + e.dir, e.y + 9, 3, 3);
+      g.restore();
     }
 
     // ジャンプ台・くずれる床
@@ -534,6 +616,21 @@
     g.fillText(fmtTime(S.totalFrames + sim.frame), 652, HUD / 2);
   }
 
+  function drawEditorHUD(g, S) {
+    g.fillStyle = '#0c0b1f';
+    g.fillRect(0, 0, VIEW_W, HUD);
+    g.font = 'bold 14px system-ui, sans-serif';
+    g.textBaseline = 'middle';
+    g.textAlign = 'left';
+    g.fillStyle = '#22d3ee';
+    g.fillText('ステージエディタ', 12, HUD / 2);
+    g.fillStyle = BASE.text;
+    g.fillText(S.sim.def.name || '', 140, HUD / 2);
+    g.textAlign = 'right';
+    g.fillStyle = BASE.sub;
+    g.fillText('クリック／ドラッグで置く・右クリックで消す', VIEW_W - 12, HUD / 2);
+  }
+
   function drawBanner(g, text, sub, alpha) {
     g.save();
     g.globalAlpha = alpha;
@@ -558,7 +655,7 @@
     if (!S.sim) { g.restore(); return; }
     setTheme(S.theme);
     const L = S.sim.L;
-    const key = L.def.name + S.theme;
+    const key = L.def.map.join('') + S.theme;
     if (staticKey !== key) { staticLayer = buildStatic(L); staticKey = key; }
 
     const sx = S.shake > 0 ? (Math.random() - 0.5) * S.shake : 0;
@@ -576,7 +673,8 @@
       const idx = Math.floor((1 - k) * (S.history.length - 1));
       positions = S.history[idx];
     }
-    if (S.screen !== 'title') drawActors(g, S, positions, t);
+    if (S.screen !== 'title' && S.screen !== 'editor') drawActors(g, S, positions, t);
+    if (S.screen === 'editor' && S.drawEditor) S.drawEditor(g, t);
     drawParticles(g, S.particles);
 
     if (S.sim.def.hint && S.state !== 'rewind' && S.screen === 'play') {
@@ -609,7 +707,7 @@
       g.restore();
     }
 
-    drawHUD(g, S, t);
+    if (S.screen === 'editor') drawEditorHUD(g, S); else drawHUD(g, S, t);
 
     if (S.banner && S.banner.t > 0) drawBanner(g, S.banner.text, S.banner.sub, Math.min(1, S.banner.t / 20));
     if (S.toast && S.toast.t > 0) {

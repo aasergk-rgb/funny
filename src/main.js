@@ -62,6 +62,7 @@
       return;
     }
     S.levelIdx = i;
+    S.custom = null;
     S.theme = WORLDS[w].theme;
     S.stageLabel = stageLabel(i);
     S.sim = new Sim(LEVELS[i]);
@@ -73,6 +74,29 @@
     Audio.music(S.theme);
     beginLoop();
     banner(`STAGE ${S.stageLabel}`, LEVELS[i].name, 90);
+  }
+
+  // つくったステージを遊ぶ（from: 'editor' ならエディタに戻る）
+  function startCustom(def, from) {
+    S.custom = { def, from };
+    S.levelIdx = -1;
+    S.theme = def.theme || 'night';
+    S.stageLabel = '★';
+    S.sim = new Sim(def);
+    S.ghosts = [];
+    S.totalFrames = 0;
+    S.screen = 'play';
+    S.fade = 1;
+    hideOverlay();
+    if (root.LM.Editor) root.LM.Editor.hideBar();
+    Audio.music(S.theme);
+    beginLoop();
+    banner(from === 'editor' ? 'テストプレイ' : 'つくったステージ', def.name, 80);
+  }
+
+  function leaveCustom() {
+    if (S.custom && S.custom.from === 'editor' && root.LM.Editor) root.LM.Editor.open();
+    else showSelect();
   }
 
   function beginLoop() {
@@ -139,6 +163,15 @@
           if (!e.ghost) Audio.play('spring');
           break;
         }
+        case 'warp':
+          if (!e.ghost) Audio.play('warp');
+          burst(e.from.x * T + 16, e.from.y * T + 16, Render.COLOR.portal[S.sim.L.tiles[e.to.y][e.to.x]] || '#cc5de8', 12, 2.5);
+          burst(e.to.x * T + 16, e.to.y * T + 16, Render.COLOR.portal[S.sim.L.tiles[e.to.y][e.to.x]] || '#cc5de8', 12, 2.5);
+          break;
+        case 'stomp':
+          Audio.play('stomp');
+          burst(e.x + 12, e.y + 10, '#fa5252', 18, 3);
+          break;
         case 'crumble':
           Audio.play('crumble');
           setTimeout(() => burst(e.x * T + 16, e.y * T + 20, '#a1866f', 10, 2), 600);
@@ -159,7 +192,7 @@
           burst(e.x + 10, e.y + 14, Render.ghostColor(e.idx), 26, 4);
           toast(e.reason === 'paradox'
             ? `パラドックス！ ゴースト${e.idx + 1}が消えた`
-            : `ゴースト${e.idx + 1}がやられた`, Render.ghostColor(e.idx), 120);
+            : e.reason === 'enemy' ? `ゴースト${e.idx + 1}が敵にやられた` : `ゴースト${e.idx + 1}がやられた`, Render.ghostColor(e.idx), 120);
           break;
         case 'death':
           Audio.play('death');
@@ -183,6 +216,12 @@
   function winLevel() {
     const loops = S.ghosts.length + 1;
     const frames = S.totalFrames + S.sim.frame;
+    if (S.custom) {
+      Audio.play('clear');
+      S.state = 'clear';
+      setTimeout(() => showCustomClear(loops, frames), 700);
+      return;
+    }
     const i = S.levelIdx;
     const prev = save.best[i];
     const prevTime = save.time[i];
@@ -263,7 +302,7 @@
       const back = overlay.querySelector('[data-back]');
       if (back) back.click();
     } else if (a === 'rewind' && S.screen === 'clear') {
-      startLevel(S.levelIdx, true);
+      if (S.custom) startCustom(S.custom.def, S.custom.from); else startLevel(S.levelIdx, true);
     }
   }
 
@@ -343,19 +382,32 @@
           <div class="grid">${cards.join('')}</div>
         </section>`;
     }).join('');
+    const customs = root.LM.Editor ? root.LM.Editor.list() : [];
+    const customSec = `<section class="world custom">
+        <div class="world-head"><h3>つくったステージ</h3><span>${customs.length} 個</span></div>
+        <div class="grid">${customs.map((c, k) => `<button class="card" data-c="${k}">
+            <span class="num">★</span><span class="name">${escapeHtml(c.name)}</span>
+            <span class="meta">${c.time}秒 ・ 最大${c.maxLoops}ループ</span></button>`).join('')}
+          <button class="card make" id="b-editor"><span class="num">＋</span><span class="name">ステージエディタ</span>
+            <span class="meta">自分でステージを作る・共有コードで遊ぶ</span></button>
+        </div>
+      </section>`;
     showOverlay(`
       <div class="panel select">
         <h2>ステージ選択</h2>
         ${sections}
+        ${customSec}
         <div class="buttons">
           ${save.ending ? '<button class="btn" id="b-ending">エンディングを見る</button>' : ''}
           <button class="btn" data-back id="b-back">タイトルへ</button>
         </div>
       </div>`);
-    overlay.querySelectorAll('.card:not(.locked)').forEach((b) => b.addEventListener('click', () => startLevel(Number(b.dataset.i))));
+    overlay.querySelectorAll('.card[data-i]:not(.locked)').forEach((b) => b.addEventListener('click', () => startLevel(Number(b.dataset.i))));
     on('#b-back', showTitle);
     on('#b-ending', showEnding);
-    const cards = overlay.querySelectorAll('.card:not(.locked)');
+    on('#b-editor', () => root.LM.Editor.open());
+    overlay.querySelectorAll('[data-c]').forEach((b) => b.addEventListener('click', () => startCustom(customs[Number(b.dataset.c)], 'select')));
+    const cards = overlay.querySelectorAll('.card[data-i]:not(.locked)');
     const last = cards[cards.length - 1];
     if (last) { last.setAttribute('data-primary', ''); last.focus({ preventScroll: true }); }
   }
@@ -372,7 +424,7 @@
           <button class="btn" id="p-retry">このループをやり直す <kbd>R</kbd></button>
           <button class="btn" id="p-undo" ${S.ghosts.length ? '' : 'disabled'}>ひとつ前のループを取り消す <kbd>U</kbd></button>
           <button class="btn" id="p-restart">ステージを最初から <kbd>X</kbd></button>
-          <button class="btn" id="p-select">ステージ選択へ</button>
+          <button class="btn" id="p-select">${S.custom && S.custom.from === 'editor' ? 'エディタに戻る' : 'ステージ選択へ'}</button>
         </div>
         <div class="toggles">
           <label><input type="checkbox" id="opt-music" ${p.music ? 'checked' : ''}> BGM</label>
@@ -383,7 +435,7 @@
     on('#p-retry', () => { resume(); retryLoop(); });
     on('#p-undo', () => { resume(); undoLoop(); });
     on('#p-restart', () => { resume(); restartLevel(); });
-    on('#p-select', showSelect);
+    on('#p-select', () => (S.custom ? leaveCustom() : showSelect()));
     overlay.querySelector('#opt-music').addEventListener('change', (e) => Audio.setOption('music', e.target.checked));
     overlay.querySelector('#opt-sfx').addEventListener('change', (e) => Audio.setOption('sfx', e.target.checked));
   }
@@ -418,6 +470,31 @@
     on('#b-next', () => (last ? showEnding() : startLevel(i + 1)));
     on('#b-retry', () => startLevel(i, true));
     on('#b-sel', showSelect);
+  }
+
+  function showCustomClear(loops, frames) {
+    S.screen = 'clear';
+    const fromEditor = S.custom.from === 'editor';
+    showOverlay(`
+      <div class="panel clear">
+        <h2>CLEAR!</h2>
+        <p class="tagline">「${escapeHtml(S.custom.def.name)}」</p>
+        <div class="result"><div class="stats">
+          <div><span class="big">${loops}</span><span class="unit">ループ</span></div>
+          <div><span class="big time">${Render.fmtTime(frames)}</span><span class="cap">タイム</span></div>
+        </div></div>
+        ${fromEditor ? '<p class="cap">クリアできることを確かめられました。共有コードで友だちに送ってみよう。</p>' : ''}
+        <div class="buttons">
+          <button class="btn primary" data-primary id="c-back">${fromEditor ? 'エディタに戻る' : 'ステージ選択へ'}</button>
+          <button class="btn" id="c-retry">もう一度 <kbd>R</kbd></button>
+        </div>
+      </div>`);
+    on('#c-back', leaveCustom);
+    on('#c-retry', () => startCustom(S.custom.def, S.custom.from));
+  }
+
+  function escapeHtml(t) {
+    return String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
   function showStory(title, kicker, lines, button, then) {
@@ -461,5 +538,5 @@
   showTitle();
   requestAnimationFrame(frame);
 
-  root.LM.Game = { S, startLevel };
+  root.LM.Game = { S, startLevel, startCustom, showSelect, hideOverlay, showOverlay, escapeHtml };
 })(window);

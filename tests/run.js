@@ -4,6 +4,7 @@
 const { Sim, T, IN } = require('../src/engine.js');
 const { LEVELS } = require('../src/levels.js');
 require('../src/levels2.js');
+require('../src/levels3.js');
 const SOLUTIONS = require('./solutions.js');
 
 function keyBits(s) {
@@ -39,6 +40,7 @@ function makeBot(cmds) {
       if (op === 'wait') { if (n++ < a) return 0; i++; n = 0; continue; }
       if (op === 'until') { if (sim.frame < a) return 0; i++; continue; }
       if (op === 'hold') { if (n++ < b) return keyBits(a); i++; n = 0; continue; }
+      if (op === 'holdUntil') { if (!b(sim)) return keyBits(a); i++; continue; }
       if (op === 'when') { if (!a(sim)) return 0; i++; continue; }
       if (op === 'ground') { if (!p.onGround) return 0; i++; continue; }
       throw new Error('unknown op ' + op);

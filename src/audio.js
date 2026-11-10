@@ -80,6 +80,8 @@
     doorOpen() { tone(260, 0.16, { to: 520, type: 'triangle', vol: 0.12 }); },
     doorClose() { tone(420, 0.14, { to: 200, type: 'triangle', vol: 0.1 }); },
     spring() { tone(300, 0.2, { to: 900, type: 'triangle', vol: 0.1 }); },
+    warp() { tone(500, 0.25, { to: 1600, type: 'sine', vol: 0.09 }); tone(1600, 0.2, { to: 400, type: 'triangle', vol: 0.05, delay: 0.12 }); },
+    stomp() { tone(220, 0.12, { to: 90, type: 'square', vol: 0.1 }); noise(0.08, 0.06, null, null, 2000); },
     crumble() { noise(0.25, 0.08, null, null, 800); },
     rewind() { tone(900, 0.6, { to: 90, type: 'sawtooth', vol: 0.06 }); tone(600, 0.6, { to: 60, type: 'square', vol: 0.03 }); },
     paradox() { tone(1200, 0.35, { to: 60, type: 'sawtooth', vol: 0.09 }); tone(300, 0.35, { to: 1500, type: 'square', vol: 0.04 }); },
@@ -102,6 +104,11 @@
       bpm: 128,
       chords: [[50, 53, 57], [46, 50, 53], [48, 52, 55], [45, 49, 52]],
       bass: [0, 3, 6, 8, 11, 14], arp: [0, 2, 1, 2, 0, 2, 1, 2], lead: [69, 72, null, 74, 72, null, 69, 65],
+    },
+    rift: {
+      bpm: 118,
+      chords: [[52, 55, 59], [48, 52, 55], [50, 53, 57], [47, 51, 54]],
+      bass: [0, 6, 10], arp: [0, 1, 2, 1, 2, 0, 2, 1], lead: [71, null, 67, 69, null, 74, 71, null],
     },
     title: {
       bpm: 92,
