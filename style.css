@@ -6,6 +6,7 @@
   --sub: #a9a6d6;
   --accent: #ff9f43;
   --ghost: #5ce1e6;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -27,7 +28,9 @@ html, body {
   align-items: center;
   justify-content: center;
   gap: 12px;
-  padding: 16px;
+  padding-block: 16px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
 }
 
 #stage-wrap {
@@ -172,7 +175,7 @@ h2 { margin: 0 0 12px; font-size: clamp(20px, 4vw, 30px); }
 }
 
 @media (max-width: 420px) {
-  #app { padding: 12px 16px; }
+  #app { padding-block: 12px; }
   #touch { gap: 8px; }
   #touch .pad { gap: 6px; }
   #touch button { width: 50px; height: 56px; }
