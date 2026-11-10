@@ -9,6 +9,7 @@
     acc: 0.7, airAcc: 0.45, fric: 0.8, max: 3.2,
     g: 0.62, jump: -10.2, cut: 0.7, maxFall: 11,
     coyote: 6, buffer: 6,
+    spring: -14, crumble: 36,
   };
   const IN = { L: 1, R: 2, J: 4 };
   const PARADOX_TOLERANCE = 0.75;
@@ -31,8 +32,8 @@
         else if (c === '*') { L.stars.push({ id: L.stars.length, x, y }); t = '.'; }
         else if (c === 'G') { L.goal = { x, y }; t = '.'; }
         else if (c === 'k') { L.key = { x, y }; t = '.'; }
-        else if (c >= 'a' && c <= 'd') { L.plates.push({ x, y, letter: c.toUpperCase() }); t = '.'; }
-        else if (c >= 'A' && c <= 'D') { (L.doorTiles[c] = L.doorTiles[c] || []).push({ x, y }); }
+        else if (c >= 'a' && c <= 'e') { L.plates.push({ x, y, letter: c.toUpperCase() }); t = '.'; }
+        else if (c >= 'A' && c <= 'E') { (L.doorTiles[c] = L.doorTiles[c] || []).push({ x, y }); }
         else if (c === 'L') { L.lockTiles.push({ x, y }); }
         row.push(t);
       }
@@ -62,6 +63,7 @@
     // ghostRecs: これまでのループの記録（古い順）
     startLoop(ghostRecs) {
       this.frame = 0;
+      this.loopId = (this.loopId || 0) + 1;
       this.actors = ghostRecs.map((rec, i) => this.makeActor(i, rec));
       this.player = this.makeActor(ghostRecs.length, null);
       this.actors.push(this.player);
@@ -71,6 +73,7 @@
       this.lockOpen = false;
       this.keyTaken = false;
       this.starsLoop = new Set();
+      this.crumbleAt = {};
       this.committed = new Set();
       for (const r of ghostRecs) for (const s of r.stars) this.committed.add(s);
       this.plats = (this.def.platforms || []).map((p) => {
@@ -86,7 +89,7 @@
       return {
         idx, rec, ghost: !!rec, w: PHY.w, h: PHY.h,
         x: s.x * T + (T - PHY.w) / 2, y: (s.y + 1) * T - PHY.h,
-        vx: 0, vy: 0, onGround: false, support: null,
+        vx: 0, vy: 0, onGround: false, support: null, springing: false,
         coyote: 0, jumpBuf: 0, prevJ: false,
         alive: true, facing: 1, dx: 0, dy: 0, px: 0, py: 0, fate: null,
       };
@@ -107,10 +110,28 @@
       if (cx < 0 || cx >= this.L.W || cy < 0) return true;
       if (cy >= this.L.H) return false;
       const c = this.L.tiles[cy][cx];
-      if (c === '#') return true;
+      if (c === '#' || c === 'S') return true;
       if (c === 'L') return !this.lockOpen;
+      if (c === 'E') return !!this.doorOpen.E; // かけ橋：スイッチが押されている間だけ現れる
       if (c >= 'A' && c <= 'D') return !this.doorOpen[c];
+      if (c === '~') return !this.crumbled(cx, cy);
       return false;
+    }
+
+    crumbled(cx, cy) {
+      const t = this.crumbleAt[cy * 1000 + cx];
+      return t !== undefined && this.frame >= t + PHY.crumble;
+    }
+
+    // 一方通行の床：上から乗るときだけ止まる
+    oneWay(cx, cy, prevBottom) {
+      if (cx < 0 || cx >= this.L.W || cy < 0 || cy >= this.L.H) return false;
+      return this.L.tiles[cy][cx] === '-' && prevBottom <= cy * T + 0.01;
+    }
+
+    tileAt(cx, cy) {
+      if (cx < 0 || cx >= this.L.W || cy < 0 || cy >= this.L.H) return '#';
+      return this.L.tiles[cy][cx];
     }
 
     moveX(a, dx) {
@@ -133,7 +154,10 @@
       const x0 = Math.floor(a.x / T), x1 = Math.floor((a.x + a.w - 0.001) / T);
       if (dy > 0) {
         const cy = Math.floor((a.y + a.h - 0.001) / T);
-        for (let cx = x0; cx <= x1; cx++) if (this.solid(cx, cy)) { a.y = cy * T - a.h; return 'down'; }
+        const prevBottom = a.y + a.h - dy;
+        for (let cx = x0; cx <= x1; cx++) {
+          if (this.solid(cx, cy) || this.oneWay(cx, cy, prevBottom)) { a.y = cy * T - a.h; return 'down'; }
+        }
       } else {
         const cy = Math.floor(a.y / T);
         for (let cx = x0; cx <= x1; cx++) if (this.solid(cx, cy)) { a.y = (cy + 1) * T; return 'up'; }
@@ -153,11 +177,12 @@
       for (const letter in this.L.doorTiles) {
         const ps = this.L.plates.filter((p) => p.letter === letter);
         let open = ps.length > 0 && ps.every((p) => this.platePressed(p));
-        // 扉は誰かが挟まっている間は閉まらない
-        if (!open && this.doorOpen[letter]) {
+        // 扉（かけ橋）は誰かが挟まっている間は閉まらない（現れない）
+        const becomesSolid = letter === 'E' ? (open && !this.doorOpen[letter]) : (!open && this.doorOpen[letter]);
+        if (becomesSolid) {
           const stuck = this.L.doorTiles[letter].some((t) =>
             this.actors.some((a) => a.alive && overlap(a.x, a.y, a.w, a.h, t.x * T, t.y * T, T, T)));
-          if (stuck) open = true;
+          if (stuck) open = !open;
         }
         if (open !== this.doorOpen[letter]) {
           this.doorOpen[letter] = open;
@@ -199,29 +224,30 @@
         a.jumpBuf = 0; a.coyote = 0; a.onGround = false; a.support = null;
         if (!a.ghost) ev.push({ type: 'jump' });
       }
-      if (!J && a.vy < 0) a.vy += PHY.g * PHY.cut; // ボタンを離すと低いジャンプ
+      if (a.vy >= 0) a.springing = false;
+      if (!J && a.vy < 0 && !a.springing) a.vy += PHY.g * PHY.cut; // ボタンを離すと低いジャンプ
       a.vy = Math.min(a.vy + PHY.g, PHY.maxFall);
 
       if (this.moveX(a, a.vx)) a.vx = 0;
 
       const prevBottom = a.y + a.h;
-      const falling = a.vy >= 0;
       const hit = this.moveY(a, a.vy);
       a.onGround = false;
       a.support = null;
 
       // ゴーストの頭・動く床には上から乗れる（下からはすり抜け）
       let best = null;
-      if (falling) {
+      {
+        // 相手の上面に対して「上から近づいて接した」ら乗る（上昇中のゴーストにも乗れる）
         const bottom = a.y + a.h;
         const cands = this.plats.concat(this.actors);
         for (const c of cands) {
           if (c === a || c.alive === false) continue;
           if (!(a.x + a.w > c.x && a.x < c.x + c.w)) continue;
-          const top = c.y;
-          const prevTop = c.py;
-          if (prevBottom <= Math.max(top, prevTop) + 0.01 && bottom >= top - 0.01) {
-            if (!best || top < best.y) best = c;
+          const relPrev = prevBottom - c.py;
+          const relNow = bottom - c.y;
+          if (relPrev <= 0.01 && relNow >= -0.01 && relNow >= relPrev - 0.001) {
+            if (!best || c.y < best.y) best = c;
           }
         }
       }
@@ -231,8 +257,23 @@
         a.vy = 0; a.onGround = true; a.support = best;
         if (wasAir && !a.ghost) ev.push({ type: 'land' });
       } else if (hit === 'down') {
-        if (a.vy > 2 && !a.ghost) ev.push({ type: 'land' });
+        const impact = a.vy;
         a.vy = 0; a.onGround = true;
+        const cy = Math.floor((a.y + a.h) / T);
+        const x0 = Math.floor(a.x / T), x1 = Math.floor((a.x + a.w - 0.001) / T);
+        let spring = false;
+        for (let cx = x0; cx <= x1; cx++) {
+          const c = this.tileAt(cx, cy);
+          if (c === 'S') spring = true;
+          if (c === '~' && this.crumbleAt[cy * 1000 + cx] === undefined) {
+            this.crumbleAt[cy * 1000 + cx] = this.frame;
+            ev.push({ type: 'crumble', x: cx, y: cy });
+          }
+        }
+        if (spring) {
+          a.vy = PHY.spring; a.onGround = false; a.springing = true; a.coyote = 0;
+          ev.push({ type: 'spring', ghost: a.ghost, x: a.x, y: a.y });
+        } else if (impact > 2 && !a.ghost) ev.push({ type: 'land' });
       } else if (hit === 'up') {
         a.vy = 0;
       }

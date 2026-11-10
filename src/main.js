@@ -1,14 +1,13 @@
-// ゲーム全体の進行（画面遷移・ループ管理）
+// ゲーム全体の進行（画面遷移・ループ管理・セーブ）
 (function (root) {
   'use strict';
-  const { Sim, LEVELS, Input, Audio, Render, IN, T } = root.LM;
+  const { Sim, LEVELS, WORLDS, ENDING, Input, Audio, Render, IN, T } = root.LM;
 
   const canvas = document.getElementById('game');
   const g = canvas.getContext('2d');
   const overlay = document.getElementById('overlay');
   const SAVE_KEY = 'loopme-save-v1';
 
-  // 高解像度ディスプレイ対応
   function setupCanvas() {
     const dpr = Math.min(root.devicePixelRatio || 1, 2);
     canvas.width = Render.VIEW_W * dpr;
@@ -20,21 +19,26 @@
 
   // ---- セーブデータ ----
   function loadSave() {
-    try { return JSON.parse(localStorage.getItem(SAVE_KEY)) || { best: {} }; }
-    catch (e) { return { best: {} }; }
+    let d = null;
+    try { d = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch (e) { d = null; }
+    d = d || {};
+    return { best: d.best || {}, time: d.time || {}, seen: d.seen || {}, ending: !!d.ending };
   }
-  let save = loadSave();
+  const save = loadSave();
   function writeSave() {
     try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (e) { /* 保存できなくても遊べる */ }
   }
   const unlocked = (i) => i === 0 || save.best[i - 1] != null;
+  const worldOf = (i) => WORLDS.findIndex((w) => i >= w.start && i < w.start + w.count);
+  const stageLabel = (i) => { const w = worldOf(i); return `${w + 1}-${i - WORLDS[w].start + 1}`; };
 
   // ---- 状態 ----
   const S = {
     screen: 'title', levelIdx: 0, sim: null, ghosts: [],
     state: 'play', anim: 0, animMax: 1, after: null,
-    history: [], particles: [], shake: 0,
+    history: [], particles: [], shake: 0, fade: 0,
     banner: null, toast: null, jumpLock: false, lastTick: -1,
+    theme: 'night', stageLabel: '', totalFrames: 0, springFx: {},
   };
 
   function banner(text, sub, frames) { S.banner = { text, sub, t: frames || 70 }; }
@@ -49,19 +53,32 @@
   }
 
   // ---- ステージ・ループ ----
-  function startLevel(i) {
+  function startLevel(i, skipStory) {
+    const w = worldOf(i);
+    if (!skipStory && i === WORLDS[w].start && !save.seen[w]) {
+      showStory(WORLDS[w].name, `WORLD ${w + 1}`, WORLDS[w].story, 'はじめる', () => {
+        save.seen[w] = true; writeSave(); startLevel(i, true);
+      });
+      return;
+    }
     S.levelIdx = i;
+    S.theme = WORLDS[w].theme;
+    S.stageLabel = stageLabel(i);
     S.sim = new Sim(LEVELS[i]);
     S.ghosts = [];
+    S.totalFrames = 0;
     S.screen = 'play';
+    S.fade = 1;
     hideOverlay();
+    Audio.music(S.theme);
     beginLoop();
-    banner(`STAGE ${i + 1}`, LEVELS[i].name, 90);
+    banner(`STAGE ${S.stageLabel}`, LEVELS[i].name, 90);
   }
 
   function beginLoop() {
     S.sim.startLoop(S.ghosts);
     S.history = [];
+    S.springFx = {};
     S.state = 'play';
     S.jumpLock = true;
     S.lastTick = -1;
@@ -69,11 +86,13 @@
   }
 
   function startRewind(then) {
+    S.totalFrames += S.sim.frame;
     S.state = 'rewind';
     S.anim = 0;
     S.animMax = Math.max(24, Math.min(50, Math.round(S.history.length / 8)));
     S.after = then || beginLoop;
     Audio.play('rewind');
+    Audio.duck(1.2);
   }
 
   function commitLoop() {
@@ -89,6 +108,11 @@
     startRewind();
   }
 
+  function retryLoop() {
+    toast('このループをやり直し', '#a9a6d6', 60);
+    startRewind();
+  }
+
   function undoLoop() {
     if (!S.ghosts.length) { toast('取り消せるループがありません', '#a9a6d6', 70); return; }
     S.ghosts.pop();
@@ -99,7 +123,7 @@
   function restartLevel() {
     S.ghosts = [];
     toast('ステージを最初から', '#a9a6d6', 60);
-    startRewind();
+    startRewind(() => { S.totalFrames = 0; beginLoop(); });
   }
 
   function handleEvents(ev) {
@@ -107,6 +131,18 @@
       switch (e.type) {
         case 'jump': Audio.play('jump'); break;
         case 'land': Audio.play('land'); break;
+        case 'spring': {
+          const cx = Math.floor((e.x + 10) / T), cy = Math.floor((e.y + 28) / T);
+          for (const dx of [-1, 0, 1]) {
+            if (S.sim.L.tiles[cy] && S.sim.L.tiles[cy][cx + dx] === 'S') S.springFx[cy * 1000 + cx + dx] = 12;
+          }
+          if (!e.ghost) Audio.play('spring');
+          break;
+        }
+        case 'crumble':
+          Audio.play('crumble');
+          setTimeout(() => burst(e.x * T + 16, e.y * T + 20, '#a1866f', 10, 2), 600);
+          break;
         case 'star':
           Audio.play('star');
           burst(e.x * T + 16, e.y * T + 16, '#ffe066', 16, 3);
@@ -146,16 +182,20 @@
 
   function winLevel() {
     const loops = S.ghosts.length + 1;
+    const frames = S.totalFrames + S.sim.frame;
     const i = S.levelIdx;
     const prev = save.best[i];
-    const isBest = prev == null || loops < prev;
-    if (isBest) { save.best[i] = loops; writeSave(); }
+    const prevTime = save.time[i];
+    const bestLoops = prev == null || loops < prev;
+    const bestTime = prevTime == null || frames < prevTime;
+    if (bestLoops) save.best[i] = loops;
+    if (bestTime) save.time[i] = frames;
+    writeSave();
     Audio.play('clear');
     const p = S.sim.player;
     burst(p.x + 10, p.y + 14, '#8ce99a', 40, 5);
     S.state = 'clear';
-    S.anim = 0;
-    setTimeout(() => showClear(loops, isBest && prev != null), 700);
+    setTimeout(() => showClear(loops, frames, bestLoops && prev != null, bestTime && prevTime != null), 700);
   }
 
   // ---- 1フレーム更新 ----
@@ -165,6 +205,8 @@
     if (S.banner && S.banner.t > 0) S.banner.t--;
     if (S.toast && S.toast.t > 0) S.toast.t--;
     if (S.shake > 0) S.shake = Math.max(0, S.shake - 0.7);
+    if (S.fade > 0) S.fade = Math.max(0, S.fade - 0.05);
+    for (const k in S.springFx) if (S.springFx[k] > 0) S.springFx[k]--;
     for (const p of S.particles) { p.x += p.vx; p.y += p.vy; p.vy += 0.12; p.life--; }
     S.particles = S.particles.filter((p) => p.life > 0);
 
@@ -172,7 +214,6 @@
 
     if (S.state === 'play') {
       let bits = Input.bits();
-      // ループ開始時にジャンプを押しっぱなしなら、一度離すまで無効
       if (S.jumpLock) { if (bits & IN.J) bits &= ~IN.J; else S.jumpLock = false; }
       const ev = S.sim.step(bits);
       S.history.push(S.sim.actors.map((a) => [a.x, a.y, a.alive]));
@@ -185,20 +226,19 @@
       if (S.anim >= S.animMax) { const f = S.after; S.after = null; f(); }
     } else if (S.state === 'dead') {
       S.anim++;
-      if (S.anim >= S.animMax) beginLoop();
+      if (S.anim >= S.animMax) { S.totalFrames += S.sim.frame; beginLoop(); }
     }
   }
 
   function onAction(a) {
     if (a === 'mute') {
       const m = Audio.toggleMute();
-      const btn = document.querySelector('[data-action="mute"]');
-      if (btn) btn.textContent = m ? '🔇' : '🔊';
+      updateMuteButton();
       if (S.screen === 'play') toast(m ? '音：オフ' : '音：オン', '#a9a6d6', 50);
       return;
     }
     if (S.screen === 'play') {
-      if (a === 'menu') { showSelect(); return; }
+      if (a === 'menu') { if (S.state !== 'clear') showPause(); return; }
       if (S.state === 'play') {
         if (a === 'rewind') { if (S.sim.frame > 10) commitLoop(); }
         else if (a === 'undo') undoLoop();
@@ -209,7 +249,13 @@
       }
       return;
     }
-    // メニュー画面
+    if (S.screen === 'pause') {
+      if (a === 'menu' || a === 'confirm') resume();
+      else if (a === 'rewind') { resume(); retryLoop(); }
+      else if (a === 'undo') { resume(); undoLoop(); }
+      else if (a === 'restart') { resume(); restartLevel(); }
+      return;
+    }
     if (a === 'confirm') {
       const primary = overlay.querySelector('[data-primary]');
       if (primary) primary.click();
@@ -217,8 +263,13 @@
       const back = overlay.querySelector('[data-back]');
       if (back) back.click();
     } else if (a === 'rewind' && S.screen === 'clear') {
-      startLevel(S.levelIdx);
+      startLevel(S.levelIdx, true);
     }
+  }
+
+  function updateMuteButton() {
+    const btn = document.querySelector('[data-action="mute"]');
+    if (btn) btn.textContent = Audio.isMuted() ? '🔇' : '🔊';
   }
 
   // ---- 画面（HTMLオーバーレイ） ----
@@ -226,83 +277,166 @@
   function showOverlay(html) {
     overlay.innerHTML = html;
     overlay.classList.remove('hidden');
-    overlay.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => Audio.play('click')));
+    overlay.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { Audio.unlock(); Audio.play('click'); }));
+    const first = overlay.querySelector('[data-primary]');
+    if (first) first.focus({ preventScroll: true });
   }
+  const on = (sel, fn) => { const el = overlay.querySelector(sel); if (el) el.addEventListener('click', fn); };
 
   function showTitle() {
     S.screen = 'title';
+    Audio.music('title');
+    const any = Object.keys(save.best).length > 0;
     showOverlay(`
       <div class="panel title">
         <div class="logo">LOOP<span>ME</span></div>
         <div class="logo-ja">ループ・ミー</div>
         <p class="tagline">10秒ごとに時間が巻き戻る。<br>さっきまでの自分は、今の自分の味方になる。</p>
         <div class="buttons">
-          <button class="btn primary" data-primary id="b-start">${save.best[0] != null ? 'つづきから' : 'スタート'}</button>
+          <button class="btn primary" data-primary id="b-start">${any ? 'つづきから' : 'はじめから'}</button>
           <button class="btn" id="b-select">ステージ選択</button>
         </div>
         <ul class="controls">
-          <li><kbd>←</kbd><kbd>→</kbd> 移動　<kbd>Space</kbd> ジャンプ</li>
-          <li><kbd>R</kbd> 巻き戻し（今の動きがゴーストになる）</li>
-          <li><kbd>U</kbd> ひとつ前のループを取り消し　<kbd>X</kbd> ステージをやり直し</li>
+          <li><kbd>←</kbd><kbd>→</kbd> 移動　<kbd>Space</kbd> ジャンプ　<kbd>R</kbd> 巻き戻し</li>
+          <li><kbd>U</kbd> ひとつ前のループを取り消し　<kbd>Esc</kbd> ポーズ</li>
         </ul>
+        <p class="progress">${progressText()}</p>
       </div>`);
-    overlay.querySelector('#b-start').addEventListener('click', () => {
+    on('#b-start', () => {
+      Audio.unlock();
       let i = 0;
       while (i < LEVELS.length - 1 && save.best[i] != null) i++;
       startLevel(i);
     });
-    overlay.querySelector('#b-select').addEventListener('click', showSelect);
+    on('#b-select', showSelect);
+  }
+
+  function progressText() {
+    const cleared = Object.keys(save.best).length;
+    const perfect = LEVELS.filter((lv, i) => save.best[i] != null && save.best[i] <= lv.par).length;
+    return cleared ? `クリア ${cleared} / ${LEVELS.length}　・　パーフェクト ${perfect} / ${LEVELS.length}` : '';
   }
 
   function showSelect() {
     S.screen = 'select';
-    const cards = LEVELS.map((lv, i) => {
-      const best = save.best[i];
-      const open = unlocked(i);
-      const medal = best == null ? '' : best <= lv.par ? '<span class="medal">★ パーフェクト</span>' : '<span class="medal dim">クリア</span>';
-      return `<button class="card ${open ? '' : 'locked'}" ${open ? '' : 'disabled'} data-i="${i}">
-          <span class="num">${i + 1}</span>
-          <span class="name">${open ? lv.name : '？？？'}</span>
-          <span class="meta">${open ? (best != null ? `ベスト ${best} ループ / 目標 ${lv.par}` : `目標 ${lv.par} ループ`) : 'ロック中'}</span>
-          ${medal}
-        </button>`;
+    Audio.music('title');
+    const sections = WORLDS.map((w, wi) => {
+      const cards = [];
+      let cleared = 0, perfect = 0;
+      for (let i = w.start; i < w.start + w.count; i++) {
+        const lv = LEVELS[i];
+        const best = save.best[i];
+        const open = unlocked(i);
+        if (best != null) cleared++;
+        if (best != null && best <= lv.par) perfect++;
+        const medal = best == null ? '' : best <= lv.par ? '<span class="medal">★ パーフェクト</span>' : '<span class="medal dim">クリア</span>';
+        const time = save.time[i] != null ? ` ・ ${Render.fmtTime(save.time[i])}` : '';
+        cards.push(`<button class="card ${open ? '' : 'locked'}" ${open ? '' : 'disabled'} data-i="${i}">
+            <span class="num">${stageLabel(i)}</span>
+            <span class="name">${open ? lv.name : '？？？'}</span>
+            <span class="meta">${open ? (best != null ? `ベスト ${best} ループ${time}` : `目標 ${lv.par} ループ`) : 'ロック中'}</span>
+            ${medal}
+          </button>`);
+      }
+      return `<section class="world ${w.theme}">
+          <div class="world-head"><h3>WORLD ${wi + 1}　${w.name}</h3><span>クリア ${cleared}/${w.count} ・ パーフェクト ${perfect}/${w.count}</span></div>
+          <div class="grid">${cards.join('')}</div>
+        </section>`;
     }).join('');
     showOverlay(`
       <div class="panel select">
         <h2>ステージ選択</h2>
-        <div class="grid">${cards}</div>
-        <div class="buttons"><button class="btn" data-back id="b-back">タイトルへ</button></div>
+        ${sections}
+        <div class="buttons">
+          ${save.ending ? '<button class="btn" id="b-ending">エンディングを見る</button>' : ''}
+          <button class="btn" data-back id="b-back">タイトルへ</button>
+        </div>
       </div>`);
     overlay.querySelectorAll('.card:not(.locked)').forEach((b) => b.addEventListener('click', () => startLevel(Number(b.dataset.i))));
-    overlay.querySelector('#b-back').addEventListener('click', showTitle);
-    const first = overlay.querySelector('.card:not(.locked)');
-    if (first) first.setAttribute('data-primary', '');
+    on('#b-back', showTitle);
+    on('#b-ending', showEnding);
+    const cards = overlay.querySelectorAll('.card:not(.locked)');
+    const last = cards[cards.length - 1];
+    if (last) { last.setAttribute('data-primary', ''); last.focus({ preventScroll: true }); }
   }
 
-  function showClear(loops, newBest) {
+  function showPause() {
+    S.screen = 'pause';
+    const p = Audio.prefs;
+    showOverlay(`
+      <div class="panel pause">
+        <h2>ポーズ</h2>
+        <p class="tagline">STAGE ${S.stageLabel}「${S.sim.def.name}」　ループ ${S.ghosts.length + 1} / ${S.sim.def.maxLoops}</p>
+        <div class="menu-list">
+          <button class="btn primary" data-primary id="p-resume">つづける <kbd>Esc</kbd></button>
+          <button class="btn" id="p-retry">このループをやり直す <kbd>R</kbd></button>
+          <button class="btn" id="p-undo" ${S.ghosts.length ? '' : 'disabled'}>ひとつ前のループを取り消す <kbd>U</kbd></button>
+          <button class="btn" id="p-restart">ステージを最初から <kbd>X</kbd></button>
+          <button class="btn" id="p-select">ステージ選択へ</button>
+        </div>
+        <div class="toggles">
+          <label><input type="checkbox" id="opt-music" ${p.music ? 'checked' : ''}> BGM</label>
+          <label><input type="checkbox" id="opt-sfx" ${p.sfx ? 'checked' : ''}> 効果音</label>
+        </div>
+      </div>`);
+    on('#p-resume', resume);
+    on('#p-retry', () => { resume(); retryLoop(); });
+    on('#p-undo', () => { resume(); undoLoop(); });
+    on('#p-restart', () => { resume(); restartLevel(); });
+    on('#p-select', showSelect);
+    overlay.querySelector('#opt-music').addEventListener('change', (e) => Audio.setOption('music', e.target.checked));
+    overlay.querySelector('#opt-sfx').addEventListener('change', (e) => Audio.setOption('sfx', e.target.checked));
+  }
+
+  function resume() { S.screen = 'play'; hideOverlay(); }
+
+  function showClear(loops, frames, newBestLoops, newBestTime) {
     S.screen = 'clear';
-    const lv = LEVELS[S.levelIdx];
-    const last = S.levelIdx === LEVELS.length - 1;
+    const i = S.levelIdx;
+    const lv = LEVELS[i];
+    const last = i === LEVELS.length - 1;
+    const w = worldOf(i);
+    const worldEnd = i === WORLDS[w].start + WORLDS[w].count - 1;
     const perfect = loops <= lv.par;
+    const nextLabel = last ? 'エンディングへ' : worldEnd ? '次のワールドへ' : '次のステージ';
     showOverlay(`
       <div class="panel clear">
-        <h2>${last ? '全ステージクリア！' : 'STAGE CLEAR!'}</h2>
+        <h2>${worldEnd ? `WORLD ${w + 1} CLEAR!` : 'STAGE CLEAR!'}</h2>
         <div class="result">
-          <div><span class="big">${loops}</span> ループ</div>
-          <div class="sub">目標 ${lv.par} ループ${newBest ? '　<b>ベスト更新！</b>' : ''}</div>
+          <div class="stats">
+            <div><span class="big">${loops}</span><span class="unit">ループ</span><span class="cap">目標 ${lv.par}${newBestLoops ? '・<b>ベスト更新</b>' : ''}</span></div>
+            <div><span class="big time">${Render.fmtTime(frames)}</span><span class="cap">タイム${newBestTime ? '・<b>ベスト更新</b>' : save.time[i] != null && save.time[i] !== frames ? `（ベスト ${Render.fmtTime(save.time[i])}）` : ''}</span></div>
+          </div>
           <div class="rank ${perfect ? 'perfect' : ''}">${perfect ? '★ パーフェクト！' : 'もっと少ないループで行けるかも？'}</div>
         </div>
-        ${last ? '<p class="tagline">遊んでくれてありがとう！ 全部パーフェクトを目指してみよう。</p>' : ''}
         <div class="buttons">
-          ${last ? '' : '<button class="btn primary" data-primary id="b-next">次のステージ</button>'}
-          <button class="btn ${last ? 'primary' : ''}" ${last ? 'data-primary' : ''} id="b-retry">もう一度 <kbd>R</kbd></button>
+          <button class="btn primary" data-primary id="b-next">${nextLabel}</button>
+          <button class="btn" id="b-retry">もう一度 <kbd>R</kbd></button>
           <button class="btn" data-back id="b-sel">ステージ選択</button>
         </div>
       </div>`);
-    const nx = overlay.querySelector('#b-next');
-    if (nx) nx.addEventListener('click', () => startLevel(S.levelIdx + 1));
-    overlay.querySelector('#b-retry').addEventListener('click', () => startLevel(S.levelIdx));
-    overlay.querySelector('#b-sel').addEventListener('click', showSelect);
+    on('#b-next', () => (last ? showEnding() : startLevel(i + 1)));
+    on('#b-retry', () => startLevel(i, true));
+    on('#b-sel', showSelect);
+  }
+
+  function showStory(title, kicker, lines, button, then) {
+    S.screen = 'story';
+    showOverlay(`
+      <div class="panel story">
+        <div class="kicker">${kicker}</div>
+        <h2>${title}</h2>
+        <div class="lines">${lines.map((l, k) => `<p style="animation-delay:${0.3 + k * 0.7}s">${l}</p>`).join('')}</div>
+        <div class="buttons"><button class="btn primary" data-primary id="b-go">${button}</button></div>
+      </div>`);
+    on('#b-go', then);
+  }
+
+  function showEnding() {
+    save.ending = true; writeSave();
+    Audio.music('title');
+    const perfect = LEVELS.filter((lv, i) => save.best[i] != null && save.best[i] <= lv.par).length;
+    showStory('時計は動き出した', 'ENDING', ENDING.concat([`パーフェクト ${perfect} / ${LEVELS.length}`]), 'タイトルへ', showTitle);
   }
 
   // ---- メインループ（60fps 固定ステップ） ----
@@ -317,10 +451,11 @@
   }
 
   Input.bindTouch(document.getElementById('touch'));
-  const muteBtn = document.querySelector('[data-action="mute"]');
-  if (muteBtn) muteBtn.textContent = Audio.isMuted() ? '🔇' : '🔊';
+  updateMuteButton();
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && S.screen === 'play' && S.state === 'play') showPause();
+  });
 
-  // タイトル画面の背景として、ステージ1を表示しておく
   S.sim = new Sim(LEVELS[0]);
   S.sim.startLoop([]);
   showTitle();

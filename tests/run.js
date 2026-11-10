@@ -3,6 +3,7 @@
 'use strict';
 const { Sim, T, IN } = require('../src/engine.js');
 const { LEVELS } = require('../src/levels.js');
+require('../src/levels2.js');
 const SOLUTIONS = require('./solutions.js');
 
 function keyBits(s) {
@@ -38,6 +39,7 @@ function makeBot(cmds) {
       if (op === 'wait') { if (n++ < a) return 0; i++; n = 0; continue; }
       if (op === 'until') { if (sim.frame < a) return 0; i++; continue; }
       if (op === 'hold') { if (n++ < b) return keyBits(a); i++; n = 0; continue; }
+      if (op === 'when') { if (!a(sim)) return 0; i++; continue; }
       if (op === 'ground') { if (!p.onGround) return 0; i++; continue; }
       throw new Error('unknown op ' + op);
     }
@@ -68,7 +70,7 @@ function runLevel(idx, verbose) {
       }
       if (verbose && sim.frame % (process.env.EVERY ? +process.env.EVERY : 15) === 0) {
         const p = sim.player;
-        log.push(`  L${li + 1} f${sim.frame} x=${((p.x + p.w / 2) / T).toFixed(2)} y=${((p.y + p.h) / T).toFixed(2)} g=${p.onGround}`);
+        log.push(`  L${li + 1} f${sim.frame} ${process.env.GHOSTS ? sim.actors.slice(0, -1).map((g) => `[${((g.x + 10) / T).toFixed(1)},${((g.y + 28) / T).toFixed(1)}${g.alive ? '' : 'x'}]`).join('') : ''} x=${((p.x + p.w / 2) / T).toFixed(2)} y=${((p.y + p.h) / T).toFixed(2)} g=${p.onGround}`);
       }
       if (sim.frame >= sim.loopFrames) done = true;
     }

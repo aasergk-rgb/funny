@@ -182,3 +182,37 @@ h2 { margin: 0 0 12px; font-size: clamp(20px, 4vw, 30px); }
   #touch .jump { width: 64px; }
   #touch .small button { width: 34px; height: 40px; font-size: 16px; }
 }
+
+/* ワールド別ステージ選択 */
+.panel.select { max-width: 760px; }
+.world { text-align: left; margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+.world-head { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; }
+.world-head h3 { margin: 0; font-size: 16px; }
+.world-head span { color: var(--sub); font-size: 12px; }
+.world.factory .card .num { color: #e8a33d; }
+.world.factory .card:hover, .world.factory .card:focus-visible { border-color: #e8a33d; }
+.progress { color: var(--sub); font-size: 13px; margin: 12px 0 0; }
+.progress:empty { display: none; }
+
+/* ポーズ */
+.menu-list { display: flex; flex-direction: column; gap: 8px; align-items: stretch; max-width: 340px; margin: 12px auto 0; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.toggles { display: flex; gap: 20px; justify-content: center; margin-top: 16px; color: var(--sub); }
+.toggles label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+.toggles input { accent-color: var(--accent); width: 18px; height: 18px; }
+
+/* クリア */
+.stats { display: flex; justify-content: center; gap: 32px; flex-wrap: wrap; }
+.stats > div { display: flex; flex-direction: column; align-items: center; }
+.result .big.time { font-size: 36px; line-height: 56px; font-variant-numeric: tabular-nums; }
+.result .unit { color: var(--sub); margin-top: -6px; }
+.result .cap { color: var(--sub); font-size: 13px; margin-top: 4px; }
+.result .cap b { color: #ffe066; }
+
+/* ストーリー */
+.panel.story { max-width: 560px; }
+.kicker { color: var(--ghost); font-weight: 900; letter-spacing: 0.3em; font-size: 13px; }
+.lines { margin: 18px 0 4px; display: flex; flex-direction: column; gap: 10px; }
+.lines p { margin: 0; line-height: 1.7; animation: line-in 0.8s ease both; }
+@keyframes line-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .lines p { animation: none; } }

@@ -75,3 +75,66 @@ module.exports = [
       ['hold', 'RJ', 40], ['ground'], ['go', 20.5], ['go', 16.5]],
   ],
 ];
+
+// ===== ワールド2 =====
+const ghost = (i) => (s) => s.actors[i];
+module.exports.push(
+  // 11 ジャンプ台
+  [[['go', 5.6], ['hold', 'J', 10], ['hold', 'R', 6], ['wait', 20], ['hold', 'R', 60], ['ground'], ['go', 21.5]]],
+  // 12 すり抜け床
+  [
+    [['go', 3.5], ['hold', 'J', 20], ['ground'], ['go', 5.5], ['hold', 'J', 20], ['ground'],
+      ['hold', 'J', 20], ['ground'], ['hold', 'J', 20], ['ground'], ['go', 7.5]],
+    [['go', 21.5]],
+  ],
+  // 13 かけ橋
+  [
+    [['go', 4.5]],
+    [['go', 10.5], ['hold', 'RJ', 15], ['ground'], ['go', 20.5]],
+  ],
+  // 14 くずれる床（ゴーストのすぐ後ろをついていく）
+  [
+    [['go', 16.5]],
+    [['wait', 10], ['go', 21.5]],
+  ],
+  // 15 ゴーストエレベーター（ジャンプ台の横で待つゴーストの頭に乗り、一緒に跳ねる）
+  [
+    [['go', 5.6], ['wait', 150], ['hold', 'J', 10], ['hold', 'R', 6]],
+    [['go', 4.3], ['hold', 'RJ', 14], ['ground'],
+      ['when', (s) => s.player.support === ghost(0)(s) && ghost(0)(s).springing && ghost(0)(s).vy > -1.5],
+      ['hold', 'RJ', 30], ['ground'], ['go', 21.5]],
+  ],
+  // 16 塔の上の鍵
+  [
+    [['go', 14.5], ['hold', 'J', 20], ['ground'], ['go', 15.5], ['hold', 'J', 20], ['ground'],
+      ['hold', 'J', 20], ['ground'], ['go', 14.5], ['go', 15.5], ['hold', 'J', 20], ['ground'], ['go', 17.5]],
+    [['go', 5.5], ['when', (s) => s.lockOpen], ['go', 2.5]],
+  ],
+  // 17 時間差トリオ
+  [
+    [['go', 3.5]],
+    [['go', 13.5]],
+    [['wait', 5], ['go', 21.5]],
+  ],
+  // 18 リレー
+  [
+    [['go', 3.5]],
+    [['go', 7.3], ['hold', 'RJ', 12], ['hold', 'R', 50], ['ground'], ['go', 10.5]],
+    [['go', 7.3], ['hold', 'RJ', 12], ['hold', 'R', 50], ['ground'], ['go', 12.5], ['ground'], ['go', 15.5]],
+    [['go', 7.3], ['hold', 'RJ', 12], ['hold', 'R', 50], ['ground'], ['go', 12.5], ['ground'], ['go', 21.5]],
+  ],
+  // 19 歯車の塔
+  [
+    [['go', 7.5]],
+    [['go', 11.2], ['hold', 'RJ', 10], ['ground'], ['go', 15.3], ['hold', 'RJ', 20], ['ground'],
+      ['go', 15.6], ['hold', 'LJ', 22], ['ground'], ['go', 9.3], ['hold', 'LJ', 14], ['ground'], ['go', 2.5]],
+  ],
+  // 20 時計塔の頂上
+  [
+    [['go', 2.4], ['wait', 150], ['hold', 'LJ', 16]],
+    [['go', 3.6], ['hold', 'LJ', 6], ['hold', 'J', 10], ['ground'],
+      ['when', (s) => s.player.support === ghost(0)(s) && ghost(0)(s).springing && ghost(0)(s).vy > -1.5],
+      ['hold', 'RJ', 30], ['ground'], ['go', 6.5], ['go', 11.5]],
+    [['go', 12.4], ['when', (s) => s.doorOpen.E], ['go', 18.4], ['when', (s) => s.lockOpen], ['go', 21.5]],
+  ],
+);

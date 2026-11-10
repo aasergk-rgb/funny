@@ -1,23 +1,35 @@
 // 描画
 (function (root) {
   'use strict';
-  const { T } = root.LM;
+  const { T, PHY } = root.LM;
   const HUD = 32;
   const VIEW_W = 768, VIEW_H = 480;
 
-  const COLOR = {
-    bg1: '#141331', bg2: '#221d48',
-    wall: '#2d2a5c', wallTop: '#7b6ff0', wallDot: '#36326b',
+  const BASE = {
     player: '#ff9f43', playerDark: '#c96a14',
-    door: { A: '#ff6b6b', B: '#4dabf7', C: '#51cf66', D: '#fcc419' },
+    door: { A: '#ff6b6b', B: '#4dabf7', C: '#51cf66', D: '#fcc419', E: '#3bc9db' },
     star: '#ffe066', gold: '#f5c542', plat: '#c4b5fd', spike: '#cfd4e6',
-    text: '#f1f0ff', sub: '#a9a6d6',
+    text: '#f1f0ff', sub: '#a9a6d6', spring: '#ff6b6b',
   };
+  // ワールドごとの配色
+  const THEMES = {
+    night: {
+      bg1: '#141331', bg2: '#221d48', wall: '#2d2a5c', wallTop: '#7b6ff0', wallDot: '#36326b',
+      deco: 'rgba(160,150,255,0.07)', plank: '#9d8cff', crumble: '#5a4f8f',
+    },
+    factory: {
+      bg1: '#19130f', bg2: '#2b2016', wall: '#3b2f25', wallTop: '#e8a33d', wallDot: '#4a3b2e',
+      deco: 'rgba(255,190,110,0.07)', plank: '#e8a33d', crumble: '#7a5a3a',
+    },
+  };
+  const COLOR = Object.assign({}, BASE, THEMES.night);
   const GHOST = ['#5ce1e6', '#b197fc', '#f783ac', '#8ce99a', '#ffd43b', '#74c0fc'];
   const ghostColor = (i) => GHOST[i % GHOST.length];
 
   let staticLayer = null;
-  let staticFor = null;
+  let staticKey = null;
+
+  function setTheme(name) { Object.assign(COLOR, THEMES[name] || THEMES.night); }
 
   function buildStatic(L) {
     const c = document.createElement('canvas');
@@ -49,6 +61,16 @@
             g.closePath();
             g.fill();
           }
+        } else if (t === '-') {
+          g.fillStyle = COLOR.plank;
+          g.fillRect(px, py, T, 5);
+          g.fillStyle = 'rgba(0,0,0,0.3)';
+          g.fillRect(px, py + 5, T, 2);
+          g.fillStyle = COLOR.plank;
+          g.globalAlpha = 0.35;
+          g.fillRect(px + 4, py + 7, 2, 6);
+          g.fillRect(px + T - 6, py + 7, 2, 6);
+          g.globalAlpha = 1;
         }
       }
     }
@@ -75,85 +97,162 @@
     g.closePath();
   }
 
+  function gear(g, cx, cy, r, teeth, rot) {
+    g.beginPath();
+    for (let i = 0; i < teeth * 2; i++) {
+      const a = rot + (i * Math.PI) / teeth;
+      const rr = i % 2 ? r : r * 0.84;
+      g.lineTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
+      g.lineTo(cx + Math.cos(a + Math.PI / teeth) * rr, cy + Math.sin(a + Math.PI / teeth) * rr);
+    }
+    g.closePath();
+    g.fill();
+    g.save();
+    g.globalCompositeOperation = 'destination-out';
+    g.beginPath(); g.arc(cx, cy, r * 0.35, 0, Math.PI * 2); g.fill();
+    g.restore();
+  }
+
+  // 背景（ワールドごと）。時計の針は、このループの残り時間を指す
+  function drawBackdrop(g, S, t, W, H) {
+    const sim = S.sim;
+    const grd = g.createLinearGradient(0, 0, 0, H);
+    grd.addColorStop(0, COLOR.bg1);
+    grd.addColorStop(1, COLOR.bg2);
+    g.fillStyle = grd;
+    g.fillRect(0, 0, W, H);
+    const prog = sim.frame / sim.loopFrames;
+    g.save();
+    g.fillStyle = COLOR.deco;
+    g.strokeStyle = COLOR.deco;
+    if (S.theme === 'factory') {
+      gear(g, 150, 150, 110, 12, t * 0.2);
+      gear(g, 300, 260, 70, 9, -t * 0.34 + 0.2);
+      gear(g, 640, 120, 90, 11, -t * 0.25);
+      g.lineWidth = 14;
+      g.beginPath(); g.moveTo(0, 360); g.lineTo(W, 360); g.stroke();
+      g.lineWidth = 8;
+      g.beginPath(); g.moveTo(520, 0); g.lineTo(520, 360); g.stroke();
+    } else {
+      // 星空
+      for (let i = 0; i < 40; i++) {
+        const sx = (i * 197) % W, sy = (i * 83) % (H * 0.7);
+        g.globalAlpha = 0.25 + 0.25 * Math.sin(t * 1.5 + i);
+        g.fillStyle = '#c9c4ff';
+        g.fillRect(sx, sy, 2, 2);
+      }
+      g.globalAlpha = 1;
+      g.fillStyle = COLOR.deco;
+      // 大きな時計
+      const cx = 560, cy = 170, r = 120;
+      g.lineWidth = 6;
+      g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.stroke();
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * Math.PI * 2;
+        g.fillRect(cx + Math.cos(a) * (r - 16) - 3, cy + Math.sin(a) * (r - 16) - 3, 6, 6);
+      }
+      g.lineWidth = 8;
+      const ha = -Math.PI / 2 + prog * Math.PI * 2;
+      g.beginPath(); g.moveTo(cx, cy); g.lineTo(cx + Math.cos(ha) * (r - 30), cy + Math.sin(ha) * (r - 30)); g.stroke();
+      g.lineWidth = 5;
+      const ma = -Math.PI / 2 + prog * Math.PI * 24;
+      g.beginPath(); g.moveTo(cx, cy); g.lineTo(cx + Math.cos(ma) * (r - 50), cy + Math.sin(ma) * (r - 50)); g.stroke();
+    }
+    g.restore();
+    g.strokeStyle = 'rgba(255,255,255,0.025)';
+    g.lineWidth = 1;
+    for (let x = 0; x <= W; x += T) { g.beginPath(); g.moveTo(x + 0.5, 0); g.lineTo(x + 0.5, H); g.stroke(); }
+    for (let y = 0; y <= H; y += T) { g.beginPath(); g.moveTo(0, y + 0.5); g.lineTo(W, y + 0.5); g.stroke(); }
+  }
+
+  // キャラクター。squash/stretch・歩きの揺れ・まばたき付き
   function drawActor(g, x, y, color, facing, opts) {
     const o = opts || {};
+    const sx = o.sx || 1, sy = o.sy || 1;
     g.save();
     g.globalAlpha = o.alpha == null ? 1 : o.alpha;
+    g.translate(x + 10, y + 28 + (o.bob || 0));
+    g.scale(sx, sy);
+    g.translate(-10, -28);
     g.fillStyle = color;
-    roundRect(g, x, y, 20, 28, 6);
+    roundRect(g, 0, 0, 20, 28, 6);
     g.fill();
     if (!o.ghost) {
-      g.fillStyle = COLOR.playerDark;
-      g.fillRect(x + 2, y + 18, 16, 4); // マフラー
+      g.fillStyle = BASE.playerDark;
+      g.fillRect(2, 18, 16, 4); // マフラー
+      g.fillRect(facing > 0 ? -3 : 18, 18 + Math.sin((o.time || 0) * 10) * 1.5, 5, 3);
     }
-    // 目
-    const ex = x + 10 + facing * 3;
+    const ex = 10 + facing * 3;
+    const eh = o.blink ? 1 : 7;
     g.fillStyle = '#fff';
-    g.fillRect(ex - 6, y + 7, 5, 7);
-    g.fillRect(ex + 1, y + 7, 5, 7);
-    g.fillStyle = '#1b1838';
-    g.fillRect(ex - 5 + facing, y + 9, 3, 4);
-    g.fillRect(ex + 2 + facing, y + 9, 3, 4);
+    g.fillRect(ex - 6, 7 + (7 - eh) / 2, 5, eh);
+    g.fillRect(ex + 1, 7 + (7 - eh) / 2, 5, eh);
+    if (!o.blink) {
+      g.fillStyle = '#1b1838';
+      g.fillRect(ex - 5 + facing, 9, 3, 4);
+      g.fillRect(ex + 2 + facing, 9, 3, 4);
+    }
+    g.restore();
     if (o.label) {
+      g.save();
       g.globalAlpha = Math.min(1, (o.alpha || 1) + 0.3);
       g.font = 'bold 11px system-ui, sans-serif';
       g.textAlign = 'center';
       g.fillStyle = color;
-      g.fillText(o.label, x + 10, y - 4);
+      g.fillText(o.label, x + 10, y - 5);
+      g.restore();
     }
-    g.restore();
   }
 
-  function drawWorld(g, S, t) {
+  // キャラの動きの状態（ループごとにリセット）
+  const anim = [];
+  function animFor(a, sim) {
+    let st = anim[a.idx];
+    if (!st || st.loopStart !== sim.loopId) {
+      st = anim[a.idx] = { loopStart: sim.loopId, land: 0, air: false, blinkAt: 60 + a.idx * 37 };
+    }
+    if (st.lastFrame !== sim.frame) {
+      st.lastFrame = sim.frame;
+      if (st.air && a.onGround) st.land = 8;
+      st.air = !a.onGround;
+      if (st.land > 0) st.land--;
+    }
+    let sx = 1, sy = 1, bob = 0;
+    if (!a.onGround) {
+      const k = Math.min(0.22, Math.abs(a.vy) * 0.018);
+      sy = 1 + k; sx = 1 - k * 0.6;
+    } else if (st.land > 0) {
+      sy = 1 - st.land * 0.025; sx = 1 + st.land * 0.025;
+    } else if (Math.abs(a.vx) > 0.5) {
+      bob = -Math.abs(Math.sin(sim.frame * 0.35)) * 2;
+    }
+    const blink = (sim.frame + st.blinkAt) % 200 < 6;
+    return { sx, sy, bob, blink };
+  }
+
+  function drawTiles(g, S, t) {
     const sim = S.sim;
     const L = sim.L;
-    if (staticFor !== L) { staticLayer = buildStatic(L); staticFor = L; }
 
-    // 背景
-    const grd = g.createLinearGradient(0, 0, 0, L.H * T);
-    grd.addColorStop(0, COLOR.bg1);
-    grd.addColorStop(1, COLOR.bg2);
-    g.fillStyle = grd;
-    g.fillRect(0, 0, L.W * T, L.H * T);
-    g.strokeStyle = 'rgba(255,255,255,0.03)';
-    g.lineWidth = 1;
-    for (let x = 0; x <= L.W; x++) { g.beginPath(); g.moveTo(x * T + 0.5, 0); g.lineTo(x * T + 0.5, L.H * T); g.stroke(); }
-    for (let y = 0; y <= L.H; y++) { g.beginPath(); g.moveTo(0, y * T + 0.5); g.lineTo(L.W * T, y * T + 0.5); g.stroke(); }
-
-    // ゴーストの軌跡
-    S.ghosts.forEach((rec, i) => {
-      const pts = rec.pos;
-      if (pts.length < 2) return;
-      g.save();
-      g.strokeStyle = ghostColor(i);
-      g.globalAlpha = 0.22;
-      g.setLineDash([3, 5]);
-      g.lineWidth = 2;
-      g.beginPath();
-      for (let k = 0; k < pts.length; k += 3) {
-        const px = pts[k][0] + 10, py = pts[k][1] + 14;
-        if (k === 0) g.moveTo(px, py); else g.lineTo(px, py);
-      }
-      g.stroke();
-      const e = pts[pts.length - 1];
-      g.setLineDash([]);
-      g.globalAlpha = 0.35;
-      g.strokeRect(e[0] + 0.5, e[1] + 0.5, 19, 27);
-      g.restore();
-    });
-
-    g.drawImage(staticLayer, 0, 0);
-
-    // 扉
+    // 扉・かけ橋
     for (const letter in L.doorTiles) {
-      const open = sim.doorOpen[letter];
-      const col = COLOR.door[letter];
+      const bridge = letter === 'E';
+      const solid = bridge ? sim.doorOpen[letter] : !sim.doorOpen[letter];
+      const col = BASE.door[letter];
       for (const d of L.doorTiles[letter]) {
         const px = d.x * T, py = d.y * T;
-        if (open) {
+        if (!solid) {
           g.save();
           g.strokeStyle = col; g.globalAlpha = 0.3; g.setLineDash([4, 4]);
-          g.strokeRect(px + 2.5, py + 2.5, T - 5, T - 5);
+          if (bridge) { g.beginPath(); g.moveTo(px, py + 2.5); g.lineTo(px + T, py + 2.5); g.stroke(); }
+          else g.strokeRect(px + 2.5, py + 2.5, T - 5, T - 5);
+          g.restore();
+        } else if (bridge) {
+          g.save();
+          g.fillStyle = col; g.shadowColor = col; g.shadowBlur = 10;
+          g.fillRect(px, py, T, 8);
+          g.globalAlpha = 0.35;
+          g.fillRect(px + 2, py + 8, T - 4, T - 10);
           g.restore();
         } else {
           g.fillStyle = col;
@@ -174,9 +273,9 @@
     // スイッチ
     for (const p of L.plates) {
       const on = sim.platePressed(p);
-      const col = COLOR.door[p.letter];
+      const col = BASE.door[p.letter];
       const px = p.x * T, py = (p.y + 1) * T;
-      g.fillStyle = '#2a2750';
+      g.fillStyle = 'rgba(0,0,0,0.35)';
       g.fillRect(px + 2, py - 4, T - 4, 4);
       g.fillStyle = col;
       if (on) {
@@ -188,14 +287,63 @@
       }
     }
 
+    // ジャンプ台・くずれる床
+    for (let y = 0; y < L.H; y++) {
+      for (let x = 0; x < L.W; x++) {
+        const c = L.tiles[y][x];
+        const px = x * T, py = y * T;
+        if (c === 'S') {
+          const k = y * 1000 + x;
+          const fx = S.springFx[k] || 0;
+          const press = fx > 0 ? Math.sin((fx / 12) * Math.PI) * 8 : 0;
+          g.fillStyle = '#4a4e69';
+          g.fillRect(px + 2, py + T - 6, T - 4, 6);
+          g.strokeStyle = '#c9cede'; g.lineWidth = 3;
+          g.beginPath();
+          const top = py + 8 + press, bottom = py + T - 6;
+          for (let i = 0; i <= 4; i++) {
+            const yy = top + ((bottom - top) * i) / 4;
+            g.lineTo(px + (i % 2 ? 8 : T - 8), yy);
+          }
+          g.stroke();
+          g.fillStyle = BASE.spring;
+          roundRect(g, px + 1, top - 6, T - 2, 7, 3); g.fill();
+        } else if (c === '~') {
+          const at = sim.crumbleAt[y * 1000 + x];
+          const gone = sim.crumbled(x, y);
+          if (gone) {
+            g.save(); g.strokeStyle = COLOR.crumble; g.globalAlpha = 0.25; g.setLineDash([3, 5]);
+            g.strokeRect(px + 2.5, py + 2.5, T - 5, T - 5); g.restore();
+            continue;
+          }
+          let ox = 0;
+          if (at !== undefined) {
+            const k = (sim.frame - at) / PHY.crumble;
+            ox = Math.sin(sim.frame * 2.1 + x) * 2.2 * k;
+          }
+          g.fillStyle = COLOR.crumble;
+          g.fillRect(px + 1 + ox, py, T - 2, T - 4);
+          g.strokeStyle = 'rgba(0,0,0,0.45)'; g.lineWidth = 1.5;
+          g.beginPath();
+          g.moveTo(px + 6 + ox, py + 2); g.lineTo(px + 13 + ox, py + 12); g.lineTo(px + 9 + ox, py + 22);
+          g.moveTo(px + 13 + ox, py + 12); g.lineTo(px + 24 + ox, py + 16);
+          g.stroke();
+          g.fillStyle = COLOR.wallTop;
+          g.globalAlpha = 0.6;
+          g.fillRect(px + 1 + ox, py, T - 2, 3);
+          g.globalAlpha = 1;
+        }
+      }
+    }
+
     // 錠
     for (const lk of L.lockTiles) {
       const px = lk.x * T, py = lk.y * T;
       if (sim.lockOpen) {
-        g.save(); g.strokeStyle = COLOR.gold; g.globalAlpha = 0.3; g.setLineDash([4, 4]);
+        g.save(); g.strokeStyle = BASE.gold; g.globalAlpha = 0.3; g.setLineDash([4, 4]);
         g.strokeRect(px + 2.5, py + 2.5, T - 5, T - 5); g.restore();
       } else {
-        g.fillStyle = COLOR.gold;
+        g.fillStyle = BASE.gold;
         g.fillRect(px + 1, py + 1, T - 2, T - 2);
         g.fillStyle = '#8a6a12';
         g.beginPath(); g.arc(px + 16, py + 13, 4, 0, Math.PI * 2); g.fill();
@@ -207,8 +355,8 @@
     if (L.key && !sim.keyTaken) {
       const kx = L.key.x * T + 16, ky = L.key.y * T + 16 + Math.sin(t * 4) * 3;
       g.save();
-      g.strokeStyle = COLOR.gold; g.fillStyle = COLOR.gold; g.lineWidth = 4;
-      g.shadowColor = COLOR.gold; g.shadowBlur = 10;
+      g.strokeStyle = BASE.gold; g.fillStyle = BASE.gold; g.lineWidth = 4;
+      g.shadowColor = BASE.gold; g.shadowBlur = 10;
       g.beginPath(); g.arc(kx - 6, ky, 6, 0, Math.PI * 2); g.stroke();
       g.fillRect(kx - 1, ky - 2, 13, 4);
       g.fillRect(kx + 6, ky + 2, 3, 5);
@@ -222,10 +370,10 @@
       const cx = s.x * T + 16, cy = s.y * T + 16 + (got ? 0 : Math.sin(t * 3 + s.id) * 3);
       g.save();
       if (got) {
-        g.strokeStyle = COLOR.star; g.globalAlpha = 0.3; g.lineWidth = 1.5;
+        g.strokeStyle = BASE.star; g.globalAlpha = 0.3; g.lineWidth = 1.5;
         starPath(g, cx, cy, 10, 4.5, 0); g.stroke();
       } else {
-        g.fillStyle = COLOR.star; g.shadowColor = COLOR.star; g.shadowBlur = 12;
+        g.fillStyle = BASE.star; g.shadowColor = BASE.star; g.shadowBlur = 12;
         starPath(g, cx, cy, 11, 5, Math.sin(t * 2 + s.id) * 0.25); g.fill();
       }
       g.restore();
@@ -249,9 +397,9 @@
         roundRect(g, px + 3, py - 8, T - 6, T + 8, 10);
         g.stroke();
       } else {
-        g.fillStyle = COLOR.sub;
+        g.fillStyle = BASE.sub;
         g.fillRect(px + 12, py + 12, 8, 7);
-        g.strokeStyle = COLOR.sub; g.lineWidth = 2;
+        g.strokeStyle = BASE.sub; g.lineWidth = 2;
         g.beginPath(); g.arc(px + 16, py + 12, 3, Math.PI, 0); g.stroke();
       }
       g.restore();
@@ -259,28 +407,64 @@
 
     // 動く床
     for (const p of sim.plats) {
-      g.fillStyle = COLOR.plat;
+      g.fillStyle = BASE.plat;
       roundRect(g, p.x, p.y, p.w, p.h, 4); g.fill();
       g.fillStyle = 'rgba(0,0,0,0.25)';
       g.fillRect(p.x + 3, p.y + p.h - 3, p.w - 6, 3);
     }
   }
 
-  function drawActors(g, S, positions) {
+  function drawGhostPaths(g, S) {
+    S.ghosts.forEach((rec, i) => {
+      const pts = rec.pos;
+      if (pts.length < 2) return;
+      g.save();
+      g.strokeStyle = ghostColor(i);
+      g.globalAlpha = 0.2;
+      g.setLineDash([3, 5]);
+      g.lineWidth = 2;
+      g.beginPath();
+      for (let k = 0; k < pts.length; k += 3) {
+        const px = pts[k][0] + 10, py = pts[k][1] + 14;
+        if (k === 0) g.moveTo(px, py); else g.lineTo(px, py);
+      }
+      g.stroke();
+      const e = pts[pts.length - 1];
+      g.setLineDash([]);
+      g.globalAlpha = 0.35;
+      g.strokeRect(e[0] + 0.5, e[1] + 0.5, 19, 27);
+      g.restore();
+    });
+  }
+
+  function drawActors(g, S, positions, t) {
     const sim = S.sim;
+    const H = S.history;
     sim.actors.forEach((a, i) => {
+      if (!a.ghost) return;
       const pos = positions ? positions[i] : null;
       const x = pos ? pos[0] : a.x, y = pos ? pos[1] : a.y;
       const alive = pos ? pos[2] : a.alive;
       if (!alive) return;
-      if (a.ghost) {
-        drawActor(g, x, y, ghostColor(a.idx), a.facing, { ghost: true, alpha: 0.55, label: String(a.idx + 1) });
+      const col = ghostColor(a.idx);
+      if (!positions && H.length > 8) {
+        // 残像
+        for (const back of [8, 4]) {
+          const hp = H[H.length - back][i];
+          if (hp && hp[2] && (Math.abs(hp[0] - x) > 2 || Math.abs(hp[1] - y) > 2)) {
+            drawActor(g, hp[0], hp[1], col, a.facing, { ghost: true, alpha: back === 8 ? 0.08 : 0.15 });
+          }
+        }
       }
+      const an = positions ? {} : animFor(a, sim);
+      drawActor(g, x, y, col, a.facing, Object.assign({ ghost: true, alpha: 0.6, label: String(a.idx + 1), time: t }, an));
     });
     const p = sim.player;
     const pp = positions ? positions[sim.actors.length - 1] : null;
     if (pp ? pp[2] : p.alive) {
-      drawActor(g, pp ? pp[0] : p.x, pp ? pp[1] : p.y, COLOR.player, p.facing, { label: positions ? '' : 'YOU' });
+      const an = positions ? {} : animFor(p, sim);
+      drawActor(g, pp ? pp[0] : p.x, pp ? pp[1] : p.y, BASE.player, p.facing,
+        Object.assign({ label: positions ? '' : 'YOU', time: t }, an));
     }
   }
 
@@ -293,41 +477,44 @@
     g.globalAlpha = 1;
   }
 
+  function fmtTime(frames) {
+    const s = frames / 60;
+    const m = Math.floor(s / 60);
+    return `${m}:${(s - m * 60).toFixed(2).padStart(5, '0')}`;
+  }
+
   function drawHUD(g, S, t) {
     const sim = S.sim;
     const def = sim.def;
-    g.fillStyle = '#0e0d24';
+    g.fillStyle = '#0c0b1f';
     g.fillRect(0, 0, VIEW_W, HUD);
     g.font = 'bold 14px system-ui, sans-serif';
     g.textBaseline = 'middle';
     g.textAlign = 'left';
-    g.fillStyle = COLOR.sub;
-    g.fillText(`STAGE ${S.levelIdx + 1}`, 12, HUD / 2);
-    g.fillStyle = COLOR.text;
-    g.fillText(def.name, 88, HUD / 2);
+    g.fillStyle = BASE.sub;
+    g.fillText(S.stageLabel || '', 12, HUD / 2);
+    g.fillStyle = BASE.text;
+    g.fillText(def.name, 52, HUD / 2);
 
-    // ループ数
     const loopNo = S.ghosts.length + 1;
     g.textAlign = 'center';
-    g.fillStyle = COLOR.sub;
-    g.fillText('LOOP', 430, HUD / 2);
+    g.fillStyle = BASE.sub;
+    g.fillText('LOOP', 400, HUD / 2);
     for (let i = 0; i < def.maxLoops; i++) {
-      const x = 470 + i * 16;
+      const x = 438 + i * 15;
       g.beginPath();
       g.arc(x, HUD / 2, 5, 0, Math.PI * 2);
       if (i < loopNo - 1) { g.fillStyle = ghostColor(i); g.fill(); }
-      else if (i === loopNo - 1) { g.fillStyle = COLOR.player; g.fill(); }
+      else if (i === loopNo - 1) { g.fillStyle = BASE.player; g.fill(); }
       else { g.strokeStyle = '#4a4680'; g.lineWidth = 1.5; g.stroke(); }
     }
 
-    // 星
     const total = sim.L.stars.length;
     const got = sim.L.stars.filter((s) => sim.committed.has(s.id) || sim.starsLoop.has(s.id)).length;
     g.textAlign = 'right';
-    g.fillStyle = got === total ? '#8ce99a' : COLOR.star;
-    g.fillText(`★ ${got} / ${total}`, VIEW_W - 12, HUD / 2);
+    g.fillStyle = got === total ? '#8ce99a' : BASE.star;
+    g.fillText(`★ ${got}/${total}`, VIEW_W - 12, HUD / 2);
 
-    // タイマー
     const remain = Math.max(0, sim.loopFrames - sim.frame);
     const ratio = remain / sim.loopFrames;
     const secs = remain / 60;
@@ -339,9 +526,12 @@
     g.fillStyle = col;
     g.fillRect(0, HUD - 4, VIEW_W * ratio, 4);
     g.textAlign = 'center';
-    g.fillStyle = secs < 3 ? col : COLOR.text;
+    g.fillStyle = secs < 3 ? col : BASE.text;
     g.font = 'bold 13px ui-monospace, monospace';
-    g.fillText(secs.toFixed(1) + 's', 600, HUD / 2);
+    g.fillText(secs.toFixed(1) + 's', 572, HUD / 2);
+    g.fillStyle = BASE.sub;
+    g.font = '12px ui-monospace, monospace';
+    g.fillText(fmtTime(S.totalFrames + sim.frame), 652, HUD / 2);
   }
 
   function drawBanner(g, text, sub, alpha) {
@@ -351,12 +541,12 @@
     g.fillRect(0, HUD + 170, VIEW_W, 76);
     g.textAlign = 'center';
     g.textBaseline = 'middle';
-    g.fillStyle = COLOR.text;
+    g.fillStyle = BASE.text;
     g.font = 'bold 30px system-ui, sans-serif';
     g.fillText(text, VIEW_W / 2, HUD + 198);
     if (sub) {
       g.font = '14px system-ui, sans-serif';
-      g.fillStyle = COLOR.sub;
+      g.fillStyle = BASE.sub;
       g.fillText(sub, VIEW_W / 2, HUD + 228);
     }
     g.restore();
@@ -366,11 +556,19 @@
     g.save();
     g.clearRect(0, 0, VIEW_W, VIEW_H);
     if (!S.sim) { g.restore(); return; }
+    setTheme(S.theme);
+    const L = S.sim.L;
+    const key = L.def.name + S.theme;
+    if (staticKey !== key) { staticLayer = buildStatic(L); staticKey = key; }
+
     const sx = S.shake > 0 ? (Math.random() - 0.5) * S.shake : 0;
     const sy = S.shake > 0 ? (Math.random() - 0.5) * S.shake : 0;
     g.save();
     g.translate(sx, HUD + sy);
-    drawWorld(g, S, t);
+    drawBackdrop(g, S, t, L.W * T, L.H * T);
+    drawGhostPaths(g, S);
+    g.drawImage(staticLayer, 0, 0);
+    drawTiles(g, S, t);
 
     let positions = null;
     if (S.state === 'rewind' && S.history.length) {
@@ -378,26 +576,24 @@
       const idx = Math.floor((1 - k) * (S.history.length - 1));
       positions = S.history[idx];
     }
-    drawActors(g, S, positions);
+    if (S.screen !== 'title') drawActors(g, S, positions, t);
     drawParticles(g, S.particles);
 
-    // ヒント
-    if (S.sim.def.hint && S.state !== 'rewind') {
+    if (S.sim.def.hint && S.state !== 'rewind' && S.screen === 'play') {
       g.save();
       g.font = '13px system-ui, sans-serif';
       g.textAlign = 'center';
       g.textBaseline = 'middle';
       const w = Math.min(VIEW_W - 24, g.measureText(S.sim.def.hint).width + 24);
-      g.fillStyle = 'rgba(8,7,26,0.78)';
+      g.fillStyle = 'rgba(8,7,26,0.8)';
       roundRect(g, (VIEW_W - w) / 2, 13 * T + 4, w, 24, 8); g.fill();
-      g.fillStyle = COLOR.sub;
+      g.fillStyle = BASE.sub;
       g.fillText(S.sim.def.hint, VIEW_W / 2, 13 * T + 16.5);
       g.restore();
     }
     g.restore();
 
     if (S.state === 'rewind') {
-      // 逆再生エフェクト
       g.save();
       g.fillStyle = 'rgba(92,225,230,0.08)';
       g.fillRect(0, HUD, VIEW_W, VIEW_H - HUD);
@@ -415,10 +611,7 @@
 
     drawHUD(g, S, t);
 
-    if (S.banner && S.banner.t > 0) {
-      const a = Math.min(1, S.banner.t / 20);
-      drawBanner(g, S.banner.text, S.banner.sub, a);
-    }
+    if (S.banner && S.banner.t > 0) drawBanner(g, S.banner.text, S.banner.sub, Math.min(1, S.banner.t / 20));
     if (S.toast && S.toast.t > 0) {
       g.save();
       g.globalAlpha = Math.min(1, S.toast.t / 20);
@@ -431,8 +624,12 @@
       g.fillText(S.toast.text, VIEW_W / 2, HUD + 68);
       g.restore();
     }
+    if (S.fade > 0) {
+      g.fillStyle = `rgba(6,5,18,${Math.min(1, S.fade)})`;
+      g.fillRect(0, 0, VIEW_W, VIEW_H);
+    }
     g.restore();
   }
 
-  root.LM.Render = { render, VIEW_W, VIEW_H, HUD, ghostColor, COLOR };
+  root.LM.Render = { render, VIEW_W, VIEW_H, HUD, ghostColor, COLOR: BASE, fmtTime };
 })(window);
