@@ -193,3 +193,31 @@ module.exports.push(
       ['hold', 'RJ', 14], ['ground'], ['hold', 'RJ', 30], ['ground'], ['go', 17.5], ['go', 22.5]],
   ],
 );
+
+// ===== ボス =====
+const hits = (n) => (s) => s.boss.hitBy.size >= n || !s.boss.alive;
+module.exports.byName = {
+  // 時計の番人：左で1回、右で1回、また左で1回（90フレーム以上あけて、別々の自分が踏む）
+  '時計の番人': [
+    [['go', 4.0], ['when', (s) => s.boss.x < 6.6 * 32], ['hold', 'RJ', 16], ['when', hits(1)]],
+    [['go', 4.0], ['when', (s) => s.frame > 300 && s.boss.x < 6.6 * 32], ['hold', 'RJ', 16], ['when', hits(2)]],
+    [['go', 4.0], ['when', hits(1)], ['hold', 'RJ', 16], ['holdUntil', 'R', (s) => px(s) > s.boss.x + 56 + 30 && s.player.onGround], ['go', 16.9],
+      ['when', (s) => s.boss.x > 13.2 * 32], ['hold', 'LJ', 20], ['when', hits(2)], ['hold', 'R', 30], ['go', 21.5]],
+  ],
+  // 歯車の主：3回の降下に、ひとりずつ
+  '歯車の主': [
+    [['go', 2.6], ['when', (s) => s.frame >= 72], ['hold', 'RJ', 14], ['when', hits(1)]],
+    [['go', 9.6], ['when', (s) => s.frame >= 252], ['hold', 'RJ', 14], ['when', hits(2)]],
+    [['go', 16.6], ['when', (s) => s.frame >= 432], ['hold', 'RJ', 14], ['when', hits(3)], ['go', 22.5]],
+  ],
+  // 裂け目の主：4か所に、ひとりずつ（高い足場へはワープで）
+  '裂け目の主': [
+    [['go', 3.6], ['hold', 'RJ', 14], ['when', hits(1)]],
+    [['go', 3.6], ['when', hits(1)], ['hold', 'RJ', 16], ['holdUntil', 'R', (s) => px(s) > s.boss.x + 56 + 30 && s.player.onGround],
+      ['holdUntil', 'R', (s) => s.player.y < 6 * 32], ['go', 19.7], ['hold', 'LJ', 14], ['when', hits(2)]],
+    [['go', 3.6], ['when', hits(1)], ['hold', 'RJ', 16], ['holdUntil', 'R', (s) => px(s) > s.boss.x + 56 + 30 && s.player.onGround],
+      ['go', 9.9], ['when', (s) => s.frame >= 283], ['hold', 'RJ', 14], ['when', hits(3)]],
+    [['holdUntil', 'L', (s) => s.player.y < 6 * 32], ['when', (s) => s.frame >= 433], ['go', 6.2], ['hold', 'LJ', 14],
+      ['when', hits(4)], ['go', 1.5]],
+  ],
+};

@@ -82,6 +82,10 @@
     spring() { tone(300, 0.2, { to: 900, type: 'triangle', vol: 0.1 }); },
     warp() { tone(500, 0.25, { to: 1600, type: 'sine', vol: 0.09 }); tone(1600, 0.2, { to: 400, type: 'triangle', vol: 0.05, delay: 0.12 }); },
     stomp() { tone(220, 0.12, { to: 90, type: 'square', vol: 0.1 }); noise(0.08, 0.06, null, null, 2000); },
+    bossHit() { tone(180, 0.25, { to: 60, type: 'sawtooth', vol: 0.14 }); tone(880, 0.12, { vol: 0.07 }); noise(0.15, 0.1, null, null, 1200); },
+    bossBlock() { tone(300, 0.08, { type: 'square', vol: 0.06 }); tone(240, 0.1, { type: 'square', vol: 0.06, delay: 0.07 }); },
+    bossDown() { [392, 523, 659, 784, 1047].forEach((f, i) => tone(f, 0.3, { vol: 0.09, delay: i * 0.08, type: 'sawtooth' })); noise(0.6, 0.12, null, null, 600); },
+    achv() { [784, 988, 1319].forEach((f, i) => tone(f, 0.16, { vol: 0.07, delay: i * 0.08, type: 'triangle' })); },
     crumble() { noise(0.25, 0.08, null, null, 800); },
     rewind() { tone(900, 0.6, { to: 90, type: 'sawtooth', vol: 0.06 }); tone(600, 0.6, { to: 60, type: 'square', vol: 0.03 }); },
     paradox() { tone(1200, 0.35, { to: 60, type: 'sawtooth', vol: 0.09 }); tone(300, 0.35, { to: 1500, type: 'square', vol: 0.04 }); },
@@ -109,6 +113,11 @@
       bpm: 118,
       chords: [[52, 55, 59], [48, 52, 55], [50, 53, 57], [47, 51, 54]],
       bass: [0, 6, 10], arp: [0, 1, 2, 1, 2, 0, 2, 1], lead: [71, null, 67, 69, null, 74, 71, null],
+    },
+    boss: {
+      bpm: 152,
+      chords: [[45, 48, 52], [45, 48, 52], [43, 46, 50], [44, 47, 52]],
+      bass: [0, 2, 4, 6, 8, 10, 12, 14], arp: [0, 2, 1, 2, 0, 2, 1, 2], lead: [69, 72, 76, null, 75, 72, 69, null],
     },
     title: {
       bpm: 92,

@@ -85,6 +85,12 @@
       this.starsLoop = new Set();
       this.crumbleAt = {};
       this.timerT = 0;
+      this.boss = null;
+      if (this.def.boss) {
+        const bd = this.def.boss;
+        const p0 = this.bossAt(0);
+        this.boss = { def: bd, w: 56, h: 48, x: p0[0], y: p0[1], px: p0[0], py: p0[1], hp: bd.hp, alive: true, hitBy: new Set(), invuln: 0 };
+      }
       this.enemies = this.L.enemies.map((e) => ({ x: e.x * T + 4, y: (e.y + 1) * T - 20, w: 24, h: 20, dir: 1, alive: true }));
       this.committed = new Set();
       for (const r of ghostRecs) for (const s of r.stars) this.committed.add(s);
@@ -316,8 +322,51 @@
       return false;
     }
 
+    // ゴールが開く条件：星を全部集め、ボスがいれば倒している
     allStars() {
+      if (this.boss && this.boss.alive) return false;
       return this.L.stars.every((s) => this.committed.has(s.id) || this.starsLoop.has(s.id));
+    }
+
+    // ---- ボス ----
+    // 動きは時間だけで決まる（毎ループ同じ）。path は [フレーム, x, y]（タイル単位・左上）の列
+    bossAt(f) {
+      const path = this.def.boss.path;
+      let i = 0;
+      while (i < path.length - 2 && f >= path[i + 1][0]) i++;
+      const a = path[i], b = path[Math.min(i + 1, path.length - 1)];
+      const k = b[0] === a[0] ? 0 : Math.min(1, Math.max(0, (f - a[0]) / (b[0] - a[0])));
+      return [(a[1] + (b[1] - a[1]) * k) * T, (a[2] + (b[2] - a[2]) * k) * T];
+    }
+
+    updateBoss(f) {
+      const b = this.boss;
+      if (!b || !b.alive) return;
+      b.px = b.x; b.py = b.y;
+      const p = this.bossAt(f);
+      b.x = p[0]; b.y = p[1];
+      if (b.invuln > 0) b.invuln--;
+    }
+
+    // ボスに触れたら true（やられる）。頭を踏めば跳ねる。
+    // ダメージが入るのは「無敵時間でない」かつ「その人がこのループでまだ攻撃していない」ときだけ
+    bossContact(a, ev) {
+      const b = this.boss;
+      if (!b || !b.alive) return false;
+      if (!overlap(a.x, a.y, a.w, a.h, b.x + 4, b.y + 2, b.w - 8, b.h - 2)) return false;
+      if (a.py + a.h > b.py + 14) return true;
+      a.y = b.y - a.h;
+      a.vy = PHY.stomp * 1.3; a.onGround = false; a.support = null; a.springing = true;
+      if (b.invuln > 0) ev.push({ type: 'bossBlock', reason: 'invuln', ghost: a.ghost });
+      else if (b.hitBy.has(a.idx)) ev.push({ type: 'bossBlock', reason: 'same', ghost: a.ghost });
+      else {
+        b.hitBy.add(a.idx);
+        b.hp--;
+        b.invuln = b.def.invuln || 90;
+        ev.push({ type: 'bossHit', hp: b.hp, x: b.x + b.w / 2, y: b.y + b.h / 2, idx: a.idx, ghost: a.ghost });
+        if (b.hp <= 0) { b.alive = false; ev.push({ type: 'bossDown', x: b.x + b.w / 2, y: b.y + b.h / 2 }); }
+      }
+      return false;
     }
 
     // 敵：左右に歩き、壁や足場の端で折り返す（毎ループ同じ動き）
@@ -378,6 +427,7 @@
       for (const p of this.plats) this.placePlat(p, f + 1);
       this.computeDoors(ev);
       this.updateEnemies();
+      this.updateBoss(f + 1);
       for (const a of this.actors) { a.px = a.x; a.py = a.y; }
 
       for (const a of this.actors) {
@@ -385,7 +435,7 @@
         const b = a.ghost ? (f < a.rec.inputs.length ? a.rec.inputs[f] : 0) : bits;
         this.updateActor(a, b, ev);
         this.warp(a, ev);
-        const hitEnemy = this.enemyContact(a, ev);
+        const hitEnemy = this.enemyContact(a, ev) || this.bossContact(a, ev);
 
         const dead = hitEnemy || this.touchingSpike(a) || a.y > this.L.H * T;
         if (a.ghost) {

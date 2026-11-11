@@ -1,7 +1,7 @@
 // ゲーム全体の進行（画面遷移・ループ管理・セーブ）
 (function (root) {
   'use strict';
-  const { Sim, LEVELS, WORLDS, ENDING, Input, Audio, Render, IN, T } = root.LM;
+  const { Sim, LEVELS, WORLDS, ENDING, TIPS, ACHIEVEMENTS, Input, Audio, Render, IN, T } = root.LM;
 
   const canvas = document.getElementById('game');
   const g = canvas.getContext('2d');
@@ -22,15 +22,64 @@
     let d = null;
     try { d = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch (e) { d = null; }
     d = d || {};
-    return { best: d.best || {}, time: d.time || {}, seen: d.seen || {}, ending: !!d.ending };
+    const out = {
+      v: 2, best: d.best || {}, time: d.time || {}, seen: d.seen || {}, ending: !!d.ending,
+      ach: d.ach || {}, stats: Object.assign({ deaths: 0, stomps: 0 }, d.stats || {}),
+    };
+    if (d.v !== 2) {
+      // ボス追加前のセーブ：ステージ番号を新しい並びに合わせる
+      for (const key of ['best', 'time']) {
+        const moved = {};
+        for (const k in out[key]) moved[root.LM.migrateIndex(Number(k))] = out[key][k];
+        out[key] = moved;
+      }
+    }
+    return out;
   }
   const save = loadSave();
   function writeSave() {
     try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (e) { /* 保存できなくても遊べる */ }
   }
-  const unlocked = (i) => i === 0 || save.best[i - 1] != null;
+  // 前のステージをクリアしていれば遊べる（先のステージをクリア済みなら、それより前も遊べる）
+  const unlocked = (i) => i === 0 || save.best[i - 1] != null || Object.keys(save.best).some((k) => Number(k) >= i);
   const worldOf = (i) => WORLDS.findIndex((w) => i >= w.start && i < w.start + w.count);
-  const stageLabel = (i) => { const w = worldOf(i); return `${w + 1}-${i - WORLDS[w].start + 1}`; };
+  const stageLabel = (i) => {
+    const w = worldOf(i);
+    return LEVELS[i].bossStage ? `${w + 1}-BOSS` : `${w + 1}-${i - WORLDS[w].start + 1}`;
+  };
+
+  // ---- 実績 ----
+  const achvBox = document.getElementById('achv');
+  const achvQueue = [];
+  let achvBusy = false;
+  function unlock(id) {
+    if (save.ach[id]) return;
+    const a = ACHIEVEMENTS.find((x) => x.id === id);
+    if (!a) return;
+    save.ach[id] = true;
+    writeSave();
+    achvQueue.push(a);
+    showNextAchv();
+  }
+  function showNextAchv() {
+    if (achvBusy || !achvQueue.length || !achvBox) return;
+    achvBusy = true;
+    const a = achvQueue.shift();
+    achvBox.innerHTML = `<span class="tag">実績解除</span><b>${a.name}</b><span>${a.desc}</span>`;
+    achvBox.classList.add('show');
+    Audio.play('achv');
+    setTimeout(() => { achvBox.classList.remove('show'); }, 2800);
+    setTimeout(() => { achvBusy = false; showNextAchv(); }, 3300);
+  }
+  function checkProgressAchievements() {
+    const cleared = LEVELS.filter((lv, i) => save.best[i] != null).length;
+    const perfect = LEVELS.filter((lv, i) => save.best[i] != null && save.best[i] <= lv.par).length;
+    if (cleared >= 1) unlock('first');
+    if (perfect >= 10) unlock('perfect10');
+    if (perfect >= LEVELS.length) unlock('perfectAll');
+    if (cleared >= LEVELS.length) unlock('allclear');
+    if (LEVELS.some((lv, i) => save.best[i] != null && save.best[i] < lv.par)) unlock('under');
+  }
 
   // ---- 状態 ----
   const S = {
@@ -71,9 +120,9 @@
     S.screen = 'play';
     S.fade = 1;
     hideOverlay();
-    Audio.music(S.theme);
+    Audio.music(LEVELS[i].bossStage ? 'boss' : S.theme);
     beginLoop();
-    banner(`STAGE ${S.stageLabel}`, LEVELS[i].name, 90);
+    banner(LEVELS[i].bossStage ? 'BOSS' : `STAGE ${S.stageLabel}`, LEVELS[i].name, 90);
   }
 
   // つくったステージを遊ぶ（from: 'editor' ならエディタに戻る）
@@ -129,6 +178,7 @@
       return;
     }
     S.ghosts.push(S.sim.rec);
+    unlock('ghost');
     startRewind();
   }
 
@@ -168,7 +218,28 @@
           burst(e.from.x * T + 16, e.from.y * T + 16, Render.COLOR.portal[S.sim.L.tiles[e.to.y][e.to.x]] || '#cc5de8', 12, 2.5);
           burst(e.to.x * T + 16, e.to.y * T + 16, Render.COLOR.portal[S.sim.L.tiles[e.to.y][e.to.x]] || '#cc5de8', 12, 2.5);
           break;
+        case 'bossHit':
+          Audio.play('bossHit');
+          burst(e.x, e.y, '#ffe066', 30, 5);
+          S.shake = 8;
+          S.bossFlash = 14;
+          if (e.hp > 0) toast(e.ghost ? `ゴースト${e.idx + 1}の攻撃が決まった！ あと ${e.hp}` : `攻撃が決まった！ あと ${e.hp}`, '#ffe066', 80);
+          break;
+        case 'bossBlock':
+          if (!e.ghost) {
+            Audio.play('bossBlock');
+            toast(e.reason === 'same' ? '同じ自分の攻撃は、もう効かない' : 'まだ無敵だ！ 少し間をあけよう', '#a9a6d6', 80);
+          }
+          break;
+        case 'bossDown':
+          Audio.play('bossDown');
+          for (let k = 0; k < 4; k++) burst(e.x + (Math.random() - 0.5) * 40, e.y + (Math.random() - 0.5) * 30, ['#ffe066', '#ff9f43', '#fff', '#f06595'][k], 30, 6);
+          S.shake = 18;
+          toast(`${S.sim.def.boss.name}を倒した！ ゴールが開いた`, '#8ce99a', 150);
+          if (S.screen === 'play' && !S.custom) unlock('boss' + (worldOf(S.levelIdx) + 1));
+          break;
         case 'stomp':
+          if (!e.ghost && S.screen === 'play') { save.stats.stomps++; if (save.stats.stomps >= 10) unlock('stomp10'); }
           Audio.play('stomp');
           burst(e.x + 12, e.y + 10, '#fa5252', 18, 3);
           break;
@@ -188,6 +259,7 @@
         case 'doorOpen': Audio.play('doorOpen'); break;
         case 'doorClose': Audio.play('doorClose'); break;
         case 'ghostLost':
+          if (e.reason === 'paradox' && S.screen === 'play') unlock('paradox');
           Audio.play('paradox');
           burst(e.x + 10, e.y + 14, Render.ghostColor(e.idx), 26, 4);
           toast(e.reason === 'paradox'
@@ -195,6 +267,10 @@
             : e.reason === 'enemy' ? `ゴースト${e.idx + 1}が敵にやられた` : `ゴースト${e.idx + 1}がやられた`, Render.ghostColor(e.idx), 120);
           break;
         case 'death':
+          if (S.screen !== 'play') return;
+          save.stats.deaths++;
+          if (save.stats.deaths >= 30) unlock('die30');
+          writeSave();
           Audio.play('death');
           burst(e.x + 10, e.y + 14, '#ff9f43', 30, 4);
           S.shake = 10;
@@ -203,10 +279,10 @@
           toast('やられた！ このループをやり直し', '#ff9f43', 90);
           return;
         case 'win':
-          winLevel();
+          if (S.screen === 'play') winLevel();
           return;
         case 'timeout':
-          commitLoop();
+          if (S.screen === 'play') commitLoop();
           return;
         default: break;
       }
@@ -216,10 +292,13 @@
   function winLevel() {
     const loops = S.ghosts.length + 1;
     const frames = S.totalFrames + S.sim.frame;
+    S.lastClear = { recs: S.ghosts.concat([S.sim.rec]), end: S.sim.frame };
     if (S.custom) {
       Audio.play('clear');
       S.state = 'clear';
-      setTimeout(() => showCustomClear(loops, frames), 700);
+      if (S.custom.from === 'editor') unlock('maker');
+      S.lastClear.show = () => showCustomClear(loops, frames);
+      setTimeout(S.lastClear.show, 700);
       return;
     }
     const i = S.levelIdx;
@@ -230,11 +309,13 @@
     if (bestLoops) save.best[i] = loops;
     if (bestTime) save.time[i] = frames;
     writeSave();
+    checkProgressAchievements();
     Audio.play('clear');
     const p = S.sim.player;
     burst(p.x + 10, p.y + 14, '#8ce99a', 40, 5);
     S.state = 'clear';
-    setTimeout(() => showClear(loops, frames, bestLoops && prev != null, bestTime && prevTime != null), 700);
+    S.lastClear.show = () => showClear(loops, frames, bestLoops && prev != null, bestTime && prevTime != null);
+    setTimeout(S.lastClear.show, 700);
   }
 
   // ---- 1フレーム更新 ----
@@ -249,6 +330,8 @@
     for (const p of S.particles) { p.x += p.vx; p.y += p.vy; p.vy += 0.12; p.life--; }
     S.particles = S.particles.filter((p) => p.life > 0);
 
+    if (S.bossFlash > 0) S.bossFlash--;
+    if (S.screen === 'replay') { stepReplay(); return; }
     if (S.screen !== 'play' || !S.sim) return;
 
     if (S.state === 'play') {
@@ -259,6 +342,8 @@
       const remain = S.sim.loopFrames - S.sim.frame;
       const sec = Math.ceil(remain / 60);
       if (sec <= 3 && sec !== S.lastTick && remain > 0) { S.lastTick = sec; Audio.play('tick'); }
+      const sup = S.sim.player.support;
+      if (sup && sup.ghost) unlock('ride');
       handleEvents(ev);
     } else if (S.state === 'rewind') {
       S.anim++;
@@ -267,6 +352,35 @@
       S.anim++;
       if (S.anim >= S.animMax) { S.totalFrames += S.sim.frame; beginLoop(); }
     }
+  }
+
+  // ---- リプレイ：クリアしたループを、全員そろえてもう一度見る ----
+  function startReplay() {
+    const lc = S.lastClear;
+    if (!lc) return;
+    hideOverlay();
+    S.ghosts = lc.recs;
+    S.sim.startLoop(lc.recs);
+    S.sim.player.alive = false;
+    S.replayHero = lc.recs.length - 1;
+    S.history = [];
+    S.springFx = {};
+    S.particles = [];
+    S.screen = 'replay';
+    S.state = 'play';
+    S.fade = 1;
+    banner('REPLAY', `${lc.recs.length} 人の自分`, 60);
+  }
+  function stepReplay() {
+    const ev = S.sim.step(0);
+    S.history.push(S.sim.actors.map((a) => [a.x, a.y, a.alive]));
+    handleEvents(ev);
+    if (S.sim.frame >= S.lastClear.end + 40 || S.sim.frame >= S.sim.loopFrames) { unlock('replay'); endReplay(); }
+  }
+  function endReplay() {
+    if (S.screen !== 'replay') return;
+    S.ghosts = S.lastClear.recs.slice(0, -1);
+    S.lastClear.show();
   }
 
   function onAction(a) {
@@ -286,6 +400,10 @@
         if (a === 'undo') undoLoop();
         else if (a === 'restart') restartLevel();
       }
+      return;
+    }
+    if (S.screen === 'replay') {
+      if (a === 'menu' || a === 'confirm' || a === 'rewind') endReplay();
       return;
     }
     if (S.screen === 'pause') {
@@ -334,6 +452,7 @@
         <div class="buttons">
           <button class="btn primary" data-primary id="b-start">${any ? 'つづきから' : 'はじめから'}</button>
           <button class="btn" id="b-select">ステージ選択</button>
+          <button class="btn" id="b-achv">実績 ${Object.keys(save.ach).length}/${ACHIEVEMENTS.length}</button>
         </div>
         <ul class="controls">
           <li><kbd>←</kbd><kbd>→</kbd> 移動　<kbd>Space</kbd> ジャンプ　<kbd>R</kbd> 巻き戻し</li>
@@ -348,6 +467,22 @@
       startLevel(i);
     });
     on('#b-select', showSelect);
+    on('#b-achv', showAchievements);
+  }
+
+  function showAchievements() {
+    S.screen = 'achv';
+    const got = Object.keys(save.ach).length;
+    showOverlay(`
+      <div class="panel achv-list">
+        <h2>実績 <small>${got} / ${ACHIEVEMENTS.length}</small></h2>
+        <ul>${ACHIEVEMENTS.map((a) => `<li class="${save.ach[a.id] ? 'got' : ''}">
+            <span class="mark">${save.ach[a.id] ? '★' : '・'}</span>
+            <span class="t"><b>${a.name}</b><span>${a.desc}</span></span></li>`).join('')}</ul>
+        <p class="progress">やられた回数 ${save.stats.deaths}　・　敵を踏んだ回数 ${save.stats.stomps}</p>
+        <div class="buttons"><button class="btn primary" data-primary data-back id="a-back">タイトルへ</button></div>
+      </div>`);
+    on('#a-back', showTitle);
   }
 
   function progressText() {
@@ -368,9 +503,11 @@
         const open = unlocked(i);
         if (best != null) cleared++;
         if (best != null && best <= lv.par) perfect++;
-        const medal = best == null ? '' : best <= lv.par ? '<span class="medal">★ パーフェクト</span>' : '<span class="medal dim">クリア</span>';
+        const medal = best == null ? ''
+          : best < lv.par ? '<span class="medal over">★★ 目標超え</span>'
+            : best === lv.par ? '<span class="medal">★ パーフェクト</span>' : '<span class="medal dim">クリア</span>';
         const time = save.time[i] != null ? ` ・ ${Render.fmtTime(save.time[i])}` : '';
-        cards.push(`<button class="card ${open ? '' : 'locked'}" ${open ? '' : 'disabled'} data-i="${i}">
+        cards.push(`<button class="card ${open ? '' : 'locked'} ${lv.bossStage ? 'boss' : ''}" ${open ? '' : 'disabled'} data-i="${i}">
             <span class="num">${stageLabel(i)}</span>
             <span class="name">${open ? lv.name : '？？？'}</span>
             <span class="meta">${open ? (best != null ? `ベスト ${best} ループ${time}` : `目標 ${lv.par} ループ`) : 'ロック中'}</span>
@@ -424,6 +561,7 @@
           <button class="btn" id="p-retry">このループをやり直す <kbd>R</kbd></button>
           <button class="btn" id="p-undo" ${S.ghosts.length ? '' : 'disabled'}>ひとつ前のループを取り消す <kbd>U</kbd></button>
           <button class="btn" id="p-restart">ステージを最初から <kbd>X</kbd></button>
+          ${TIPS[S.sim.def.name] ? '<button class="btn" id="p-tip">ヒントを見る</button>' : ''}
           <button class="btn" id="p-select">${S.custom && S.custom.from === 'editor' ? 'エディタに戻る' : 'ステージ選択へ'}</button>
         </div>
         <div class="toggles">
@@ -435,6 +573,13 @@
     on('#p-retry', () => { resume(); retryLoop(); });
     on('#p-undo', () => { resume(); undoLoop(); });
     on('#p-restart', () => { resume(); restartLevel(); });
+    on('#p-tip', () => {
+      const btn = overlay.querySelector('#p-tip');
+      const tip = document.createElement('p');
+      tip.className = 'tip';
+      tip.textContent = TIPS[S.sim.def.name];
+      btn.replaceWith(tip);
+    });
     on('#p-select', () => (S.custom ? leaveCustom() : showSelect()));
     overlay.querySelector('#opt-music').addEventListener('change', (e) => Audio.setOption('music', e.target.checked));
     overlay.querySelector('#opt-sfx').addEventListener('change', (e) => Audio.setOption('sfx', e.target.checked));
@@ -459,16 +604,18 @@
             <div><span class="big">${loops}</span><span class="unit">ループ</span><span class="cap">目標 ${lv.par}${newBestLoops ? '・<b>ベスト更新</b>' : ''}</span></div>
             <div><span class="big time">${Render.fmtTime(frames)}</span><span class="cap">タイム${newBestTime ? '・<b>ベスト更新</b>' : save.time[i] != null && save.time[i] !== frames ? `（ベスト ${Render.fmtTime(save.time[i])}）` : ''}</span></div>
           </div>
-          <div class="rank ${perfect ? 'perfect' : ''}">${perfect ? '★ パーフェクト！' : 'もっと少ないループで行けるかも？'}</div>
+          <div class="rank ${perfect ? 'perfect' : ''}">${loops < lv.par ? '★★ 目標超え！ 想定より少ないループでクリア' : perfect ? '★ パーフェクト！' : 'もっと少ないループで行けるかも？'}</div>
         </div>
         <div class="buttons">
           <button class="btn primary" data-primary id="b-next">${nextLabel}</button>
+          <button class="btn" id="b-replay">▶ リプレイ</button>
           <button class="btn" id="b-retry">もう一度 <kbd>R</kbd></button>
           <button class="btn" data-back id="b-sel">ステージ選択</button>
         </div>
       </div>`);
     on('#b-next', () => (last ? showEnding() : startLevel(i + 1)));
     on('#b-retry', () => startLevel(i, true));
+    on('#b-replay', startReplay);
     on('#b-sel', showSelect);
   }
 
@@ -486,11 +633,13 @@
         ${fromEditor ? '<p class="cap">クリアできることを確かめられました。共有コードで友だちに送ってみよう。</p>' : ''}
         <div class="buttons">
           <button class="btn primary" data-primary id="c-back">${fromEditor ? 'エディタに戻る' : 'ステージ選択へ'}</button>
+          <button class="btn" id="c-replay">▶ リプレイ</button>
           <button class="btn" id="c-retry">もう一度 <kbd>R</kbd></button>
         </div>
       </div>`);
     on('#c-back', leaveCustom);
     on('#c-retry', () => startCustom(S.custom.def, S.custom.from));
+    on('#c-replay', startReplay);
   }
 
   function escapeHtml(t) {

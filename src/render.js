@@ -348,6 +348,8 @@
       }
     }
 
+    drawBoss(g, S, t);
+
     // 敵
     for (const e of sim.enemies) {
       if (!e.alive) continue;
@@ -496,6 +498,103 @@
     }
   }
 
+  const BOSS_LOOK = {
+    clock: { body: '#5f3dc4', trim: '#d0bfff' },
+    gear: { body: '#a35f1c', trim: '#ffd8a8' },
+    rift: { body: '#a61e4d', trim: '#22d3ee' },
+  };
+
+  function drawBoss(g, S, t) {
+    const sim = S.sim;
+    const b = sim.boss;
+    if (!b || !b.alive) return;
+    const look = BOSS_LOOK[b.def.kind] || BOSS_LOOK.clock;
+
+    // 次に現れる場所の影（降下・瞬間移動の予告）
+    if (b.def.kind !== 'clock') {
+      const nx = sim.bossAt(sim.frame + 45);
+      if (Math.abs(nx[0] - b.x) + Math.abs(nx[1] - b.y) > 60) {
+        g.save();
+        g.globalAlpha = 0.25 + 0.2 * Math.sin(t * 14);
+        g.strokeStyle = look.trim; g.lineWidth = 2; g.setLineDash([6, 5]);
+        roundRect(g, nx[0] + 1, nx[1] + 1, b.w - 2, b.h - 2, 12); g.stroke();
+        g.fillStyle = look.trim; g.globalAlpha *= 0.3;
+        roundRect(g, nx[0] + 1, nx[1] + 1, b.w - 2, b.h - 2, 12); g.fill();
+        g.restore();
+      }
+    }
+
+    const flash = S.bossFlash > 0;
+    const x = b.x, y = b.y + Math.sin(t * 5) * 1.2;
+    g.save();
+    if (b.invuln > 0 && Math.floor(t * 16) % 2) g.globalAlpha = 0.45;
+    // からだ
+    g.fillStyle = flash ? '#fff' : look.body;
+    if (b.def.kind === 'gear') {
+      // 歯
+      for (let i = 0; i < 10; i++) {
+        const a = (i / 10) * Math.PI * 2 + t * 1.5;
+        g.fillRect(x + b.w / 2 + Math.cos(a) * 30 - 5, y + b.h / 2 + Math.sin(a) * 24 - 5, 10, 10);
+      }
+    }
+    roundRect(g, x, y + 4, b.w, b.h - 4, 14); g.fill();
+    if (b.def.kind === 'rift') {
+      g.fillStyle = look.trim; g.globalAlpha *= 0.5;
+      g.fillRect(x + 4 + ((t * 60) % 30), y + 14, 14, 2);
+      g.fillRect(x + 30 - ((t * 45) % 24), y + 36, 16, 2);
+      g.globalAlpha = (b.invuln > 0 && Math.floor(t * 16) % 2) ? 0.45 : 1;
+    }
+    // 頭（ここを踏む）。無敵中は灰色
+    g.fillStyle = b.invuln > 0 ? '#868e96' : '#ffe066';
+    if (b.invuln <= 0) { g.shadowColor = '#ffe066'; g.shadowBlur = 10 + Math.sin(t * 8) * 4; }
+    roundRect(g, x + 6, y, b.w - 12, 8, 4); g.fill();
+    g.shadowBlur = 0;
+    // 顔
+    g.fillStyle = '#fff';
+    g.fillRect(x + 12, y + 18, 11, 10); g.fillRect(x + b.w - 23, y + 18, 11, 10);
+    g.fillStyle = '#1b1838';
+    const look2 = S.sim.player.alive ? Math.sign(S.sim.player.x - (b.x + b.w / 2)) * 2 : 0;
+    g.fillRect(x + 15 + look2, y + 21, 5, 6); g.fillRect(x + b.w - 20 + look2, y + 21, 5, 6);
+    g.strokeStyle = '#1b1838'; g.lineWidth = 3;
+    g.beginPath(); g.moveTo(x + 10, y + 13); g.lineTo(x + 24, y + 17); g.moveTo(x + b.w - 10, y + 13); g.lineTo(x + b.w - 24, y + 17); g.stroke();
+    if (b.def.kind === 'clock') {
+      // 胸の時計
+      g.strokeStyle = look.trim; g.lineWidth = 2;
+      g.beginPath(); g.arc(x + b.w / 2, y + 38, 6, 0, Math.PI * 2); g.stroke();
+      const a = t * 3;
+      g.beginPath(); g.moveTo(x + b.w / 2, y + 38); g.lineTo(x + b.w / 2 + Math.cos(a) * 5, y + 38 + Math.sin(a) * 5); g.stroke();
+    } else {
+      g.fillStyle = '#1b1838';
+      g.fillRect(x + 20, y + 35, b.w - 40, 4);
+    }
+    g.restore();
+  }
+
+  function drawBossBar(g, S) {
+    const b = S.sim.boss;
+    if (!b) return;
+    const total = b.def.hp;
+    const w = 26, gap = 6;
+    const full = total * w + (total - 1) * gap;
+    const x0 = (VIEW_W - full) / 2, y0 = HUD + 10;
+    g.save();
+    g.font = 'bold 12px system-ui, sans-serif';
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillStyle = 'rgba(8,7,26,0.75)';
+    roundRect(g, x0 - 70, y0 - 6, full + 140, 26, 13); g.fill();
+    g.fillStyle = BASE.text;
+    g.textAlign = 'right';
+    g.fillText(b.def.name, x0 - 10, y0 + 7);
+    for (let i = 0; i < total; i++) {
+      g.fillStyle = i < b.hp ? '#ff6b6b' : '#3b3866';
+      roundRect(g, x0 + i * (w + gap), y0 + 2, w, 10, 5); g.fill();
+    }
+    g.textAlign = 'left';
+    g.fillStyle = b.alive ? BASE.sub : '#8ce99a';
+    g.fillText(b.alive ? `あと ${b.hp}` : '撃破！', x0 + full + 10, y0 + 7);
+    g.restore();
+  }
+
   function drawGhostPaths(g, S) {
     S.ghosts.forEach((rec, i) => {
       const pts = rec.pos;
@@ -539,6 +638,11 @@
         }
       }
       const an = positions ? {} : animFor(a, sim);
+      if (S.screen === 'replay' && a.idx === S.replayHero) {
+        // リプレイでは、最後のループの自分を主役として描く
+        drawActor(g, x, y, BASE.player, a.facing, Object.assign({ label: 'YOU', time: t }, an));
+        return;
+      }
       drawActor(g, x, y, col, a.facing, Object.assign({ ghost: true, alpha: 0.6, label: String(a.idx + 1), time: t }, an));
     });
     const p = sim.player;
@@ -575,8 +679,9 @@
     g.textAlign = 'left';
     g.fillStyle = BASE.sub;
     g.fillText(S.stageLabel || '', 12, HUD / 2);
+    const labelW = g.measureText(S.stageLabel || '').width;
     g.fillStyle = BASE.text;
-    g.fillText(def.name, 52, HUD / 2);
+    g.fillText(def.name, 12 + labelW + 12, HUD / 2);
 
     const loopNo = S.ghosts.length + 1;
     g.textAlign = 'center';
@@ -595,7 +700,7 @@
     const got = sim.L.stars.filter((s) => sim.committed.has(s.id) || sim.starsLoop.has(s.id)).length;
     g.textAlign = 'right';
     g.fillStyle = got === total ? '#8ce99a' : BASE.star;
-    g.fillText(`★ ${got}/${total}`, VIEW_W - 12, HUD / 2);
+    if (total > 0) g.fillText(`★ ${got}/${total}`, VIEW_W - 12, HUD / 2);
 
     const remain = Math.max(0, sim.loopFrames - sim.frame);
     const ratio = remain / sim.loopFrames;
@@ -691,7 +796,20 @@
     }
     g.restore();
 
-    if (S.state === 'rewind') {
+    if (S.screen === 'play' || S.screen === 'replay' || S.screen === 'pause' || S.screen === 'clear') drawBossBar(g, S);
+    if (S.screen === 'replay') {
+      g.save();
+      g.font = 'bold 22px system-ui, sans-serif';
+      g.textAlign = 'left'; g.textBaseline = 'top';
+      g.fillStyle = (Math.floor(t * 2) % 2) ? '#ff6b6b' : '#ffa8a8';
+      g.fillText('● REPLAY', 20, HUD + 14);
+      g.font = '12px system-ui, sans-serif';
+      g.fillStyle = BASE.sub;
+      g.textAlign = 'right';
+      g.fillText('Enter / Esc で終わる', VIEW_W - 16, HUD + 20);
+      g.restore();
+    }
+    if (S.state === 'rewind' && S.screen !== 'replay') {
       g.save();
       g.fillStyle = 'rgba(92,225,230,0.08)';
       g.fillRect(0, HUD, VIEW_W, VIEW_H - HUD);

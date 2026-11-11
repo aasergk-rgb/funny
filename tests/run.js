@@ -5,7 +5,11 @@ const { Sim, T, IN } = require('../src/engine.js');
 const { LEVELS } = require('../src/levels.js');
 require('../src/levels2.js');
 require('../src/levels3.js');
+require('../src/bosses.js');
 const SOLUTIONS = require('./solutions.js');
+// ボスステージは名前で、それ以外は並び順で模範解答を対応させる
+let nth = 0;
+const SOL_FOR = LEVELS.map((lv) => (lv.bossStage ? SOLUTIONS.byName[lv.name] : SOLUTIONS[nth++]));
 
 function keyBits(s) {
   let b = 0;
@@ -51,7 +55,7 @@ function makeBot(cmds) {
 
 function runLevel(idx, verbose) {
   const def = LEVELS[idx];
-  const sol = SOLUTIONS[idx];
+  const sol = SOL_FOR[idx];
   const sim = new Sim(def);
   const ghosts = [];
   const log = [];
@@ -66,13 +70,13 @@ function runLevel(idx, verbose) {
       const ev = sim.step(bits === null ? 0 : bits);
       for (const e of ev) {
         if (e.type === 'win') { won = true; done = true; }
-        if (e.type === 'death') throw new Error(`ステージ${idx + 1} ループ${li + 1}: f${sim.frame} でやられた x=${((sim.player.x + 10) / T).toFixed(2)} y=${((sim.player.y + 28) / T).toFixed(2)}`);
+        if (e.type === 'death') { if (process.env.TRACE) console.log(log.slice(-(+process.env.TRACE)).join("\n")); throw new Error(`ステージ${idx + 1} ループ${li + 1}: f${sim.frame} でやられた x=${((sim.player.x + 10) / T).toFixed(2)} y=${((sim.player.y + 28) / T).toFixed(2)}`); }
         if (e.type === 'ghostLost') log.push(`ループ${li + 1} f${sim.frame}: ゴースト${e.idx + 1} 消失(${e.reason})`);
         if (e.type === 'timeout') done = true;
       }
       if (verbose && sim.frame % (process.env.EVERY ? +process.env.EVERY : 15) === 0) {
         const p = sim.player;
-        log.push(`  L${li + 1} f${sim.frame} ${process.env.GHOSTS ? sim.actors.slice(0, -1).map((g) => `[${((g.x + 10) / T).toFixed(1)},${((g.y + 28) / T).toFixed(1)}${g.alive ? '' : 'x'}]`).join('') : ''} x=${((p.x + p.w / 2) / T).toFixed(2)} y=${((p.y + p.h) / T).toFixed(2)} g=${p.onGround}`);
+        log.push(`  L${li + 1} f${sim.frame} ${process.env.GHOSTS ? sim.actors.slice(0, -1).map((g) => `[${((g.x + 10) / T).toFixed(1)},${((g.y + 28) / T).toFixed(1)}${g.alive ? '' : 'x'}]`).join('') : ''} x=${((p.x + p.w / 2) / T).toFixed(2)} y=${((p.y + p.h) / T).toFixed(2)} g=${p.onGround}${sim.boss ? ` B=${(sim.boss.x / T).toFixed(1)},${(sim.boss.y / T).toFixed(1)} hp${sim.boss.hp}` : ""}`);
       }
       if (sim.frame >= sim.loopFrames) done = true;
     }
